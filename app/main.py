@@ -15,6 +15,11 @@ app = FastAPI(title="Living High Chatbot")
 app.include_router(router)
 
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "Living High WhatsApp Chatbot"}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
