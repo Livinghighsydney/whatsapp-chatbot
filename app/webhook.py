@@ -2,8 +2,11 @@ import os
 import logging
 from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import PlainTextResponse
-from app.ai import get_reply
+
+from app.ai import get_reply, is_handoff
 from app.whatsapp import send_message
+from app import state
+from app.handoff import is_staff, trigger, handle_staff_message, forward_to_staff
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -11,9 +14,32 @@ router = APIRouter()
 
 async def process_message(from_: str, body: str) -> None:
     try:
-        reply = await get_reply(body)
-        send_message(to=from_, body=reply)
-        logger.info("Replied  | to=%s | body=%s", from_, reply)
+        # ── Staff reply ────────────────────────────────────────────────────────
+        if is_staff(from_):
+            handle_staff_message(from_, body)
+            return
+
+        conv = state.get(from_)
+
+        # ── Tenant message during active handoff ───────────────────────────────
+        if conv.status == "handed_off":
+            state.add_message(from_, "user", body)
+            forward_to_staff(from_, body)
+            return
+
+        # ── Normal bot flow ────────────────────────────────────────────────────
+        reply = await get_reply(body, history=conv.history)
+        handoff, reason = is_handoff(reply)
+
+        if handoff:
+            state.add_message(from_, "user", body)
+            trigger(from_, reason)
+        else:
+            state.add_message(from_, "user", body)
+            state.add_message(from_, "assistant", reply)
+            send_message(to=from_, body=reply)
+            logger.info("Replied | to=%s | body=%s", from_, reply)
+
     except Exception:
         logger.exception("Failed to process message from %s", from_)
 

@@ -1,10 +1,26 @@
+# Secrets
 .env
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
+
+# Logs
+*.log
+logs/
+
+# OS
 .DS_Store
+
+# Media / documents
 *.png
 *.jpg
 *.jpeg
+*.pdf
+
+# Tunnel / runtime artifacts
+tunnel.log
+uvicorn.log
