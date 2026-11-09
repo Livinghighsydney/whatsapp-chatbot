@@ -28,6 +28,26 @@ def send_message(to: str, body: str) -> None:
     logger.info("Meta message sent | to=%s", to_clean)
 
 
+def send_template(to: str, template_name: str, variables: list[str], language: str = "en") -> None:
+    to_clean = to.replace("whatsapp:", "").replace("+", "")
+    _post({
+        "messaging_product": "whatsapp",
+        "to": to_clean,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": v} for v in variables],
+                }
+            ],
+        },
+    })
+    logger.info("Template sent | to=%s | template=%s", to_clean, template_name)
+
+
 def mark_read_and_typing(message_id: str) -> None:
     """Mark incoming message as read and show typing indicator.
 

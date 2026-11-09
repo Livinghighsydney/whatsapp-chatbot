@@ -15,6 +15,8 @@ class Conversation:
     handed_off_at: datetime | None = None
     # Role: "user" (tenant), "assistant" (bot), "staff" (human agent)
     history: list[dict] = field(default_factory=list)
+    # Staff numbers that have already received the conversation history dump
+    staff_history_sent: set = field(default_factory=set)
 
 
 _store: dict[str, Conversation] = {}

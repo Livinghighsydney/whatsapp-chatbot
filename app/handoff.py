@@ -15,7 +15,9 @@ import logging
 from datetime import datetime, timezone
 
 from app import state
-from app.whatsapp import send_message
+from app.whatsapp import send_message, send_template
+
+HANDOFF_TEMPLATE = "staff_handoff_alert"
 
 logger = logging.getLogger(__name__)
 
@@ -58,17 +60,12 @@ def trigger(tenant_number: str, reason: str) -> None:
         body="I've connected you with one of our team members — they'll reply shortly! 🙏",
     )
 
-    history_text = _format_history(conv.history)
-    notification = (
-        "🔔 *Handoff Request*\n\n"
-        f"*Tenant:* +{tenant_number}\n"
-        f"*Reason:* {reason}\n\n"
-        f"*Conversation history:*\n{history_text}\n\n"
-        "Reply here to respond to the tenant.\n"
-        "Type *DONE* when finished to return them to the bot."
-    )
     for staff_number in staff_numbers:
-        send_message(to=staff_number, body=notification)
+        send_template(
+            to=staff_number,
+            template_name=HANDOFF_TEMPLATE,
+            variables=[tenant_number, reason],
+        )
 
     logger.info("Handoff triggered | tenant=%s → staff=%s | reason=%s", tenant_number, staff_numbers, reason)
 
@@ -81,11 +78,25 @@ def handle_staff_message(staff_number: str, body: str) -> None:
         send_message(to=staff_number, body="No active handoff conversation at the moment.")
         return
 
+    # First reply from this staff member — send conversation history now that
+    # the window is open (template opened the conversation, reply unlocks free-form)
+    conv = state.get(tenant_number)
+    if staff_number not in conv.staff_history_sent:
+        conv.staff_history_sent.add(staff_number)
+        history_text = _format_history(conv.history)
+        send_message(
+            to=staff_number,
+            body=f"📋 *Conversation history:*\n\n{history_text}\n\n"
+                 "You can now reply directly to the tenant above. Type *DONE* when finished.",
+        )
+        return
+
     if body.strip().upper() == "DONE":
         conv = state.get(tenant_number)
         conv.status = "bot_active"
         conv.assigned_staff = []
         conv.handed_off_at = None
+        conv.staff_history_sent = set()
 
         for s in (conv.assigned_staff or [staff_number]):
             send_message(to=s, body="✅ Conversation returned to bot.")
