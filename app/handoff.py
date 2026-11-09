@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from app import state
 from app.whatsapp import send_message, send_template
 
-HANDOFF_TEMPLATE = "staff_handoff_request"
+HANDOFF_TEMPLATE = "staff_handoff_alert"
 
 logger = logging.getLogger(__name__)
 
