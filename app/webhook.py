@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 
 from app.ai import get_reply, is_handoff
-from app.whatsapp import send_message
+from app.whatsapp import send_message, mark_read_and_typing
 from app import state
 from app.handoff import is_staff, trigger, handle_staff_message, forward_to_staff
 
@@ -12,12 +12,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def process_message(from_: str, body: str) -> None:
+async def process_message(from_: str, body: str, message_id: str) -> None:
     try:
         # ── Staff reply ────────────────────────────────────────────────────────
         if is_staff(from_):
             handle_staff_message(from_, body)
             return
+
+        # Show read receipt + typing animation while bot prepares reply
+        mark_read_and_typing(message_id)
 
         conv = state.get(from_)
 
@@ -74,9 +77,10 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
 
         from_ = message["from"]
         body = message["text"]["body"]
+        message_id = message["id"]
 
         logger.info("Incoming | from=%s | body=%s", from_, body)
-        background_tasks.add_task(process_message, from_, body)
+        background_tasks.add_task(process_message, from_, body, message_id)
 
     except (KeyError, IndexError):
         pass
