@@ -14,6 +14,8 @@ def _post(payload: dict) -> None:
         "Content-Type": "application/json",
     }
     response = httpx.post(url, json=payload, headers=headers)
+    if not response.is_success:
+        logger.error("Meta API error | status=%s | body=%s", response.status_code, response.text)
     response.raise_for_status()
 
 
@@ -28,7 +30,7 @@ def send_message(to: str, body: str) -> None:
     logger.info("Meta message sent | to=%s", to_clean)
 
 
-def send_template(to: str, template_name: str, variables: list[str], language: str = "en_US") -> None:
+def send_template(to: str, template_name: str, variables: list[str], language: str = "en") -> None:
     to_clean = to.replace("whatsapp:", "").replace("+", "")
     _post({
         "messaging_product": "whatsapp",
