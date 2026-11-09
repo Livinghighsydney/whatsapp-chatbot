@@ -28,7 +28,7 @@ def send_message(to: str, body: str) -> None:
     logger.info("Meta message sent | to=%s", to_clean)
 
 
-def send_template(to: str, template_name: str, variables: list[str], language: str = "en") -> None:
+def send_template(to: str, template_name: str, variables: list[str], language: str = "en_US") -> None:
     to_clean = to.replace("whatsapp:", "").replace("+", "")
     _post({
         "messaging_product": "whatsapp",
