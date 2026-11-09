@@ -11,7 +11,7 @@ from typing import Literal
 @dataclass
 class Conversation:
     status: Literal["bot_active", "handed_off"] = "bot_active"
-    assigned_staff: str | None = None
+    assigned_staff: list[str] = field(default_factory=list)
     handed_off_at: datetime | None = None
     # Role: "user" (tenant), "assistant" (bot), "staff" (human agent)
     history: list[dict] = field(default_factory=list)
@@ -38,6 +38,6 @@ def add_message(phone: str, role: str, content: str) -> None:
 def find_tenant_for_staff(staff_number: str) -> str | None:
     """Return the tenant number currently assigned to this staff member."""
     for phone, conv in _store.items():
-        if conv.status == "handed_off" and conv.assigned_staff == staff_number:
+        if conv.status == "handed_off" and staff_number in conv.assigned_staff:
             return phone
     return None

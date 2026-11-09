@@ -48,11 +48,9 @@ def trigger(tenant_number: str, reason: str) -> None:
         )
         return
 
-    staff_number = staff_numbers[0]
-
     conv = state.get(tenant_number)
     conv.status = "handed_off"
-    conv.assigned_staff = staff_number
+    conv.assigned_staff = staff_numbers  # all staff can respond
     conv.handed_off_at = datetime.now(timezone.utc)
 
     send_message(
@@ -61,18 +59,18 @@ def trigger(tenant_number: str, reason: str) -> None:
     )
 
     history_text = _format_history(conv.history)
-    send_message(
-        to=staff_number,
-        body=(
-            "🔔 *Handoff Request*\n\n"
-            f"*Tenant:* +{tenant_number}\n"
-            f"*Reason:* {reason}\n\n"
-            f"*Conversation history:*\n{history_text}\n\n"
-            "Reply here to respond to the tenant.\n"
-            "Type *DONE* when finished to return them to the bot."
-        ),
+    notification = (
+        "🔔 *Handoff Request*\n\n"
+        f"*Tenant:* +{tenant_number}\n"
+        f"*Reason:* {reason}\n\n"
+        f"*Conversation history:*\n{history_text}\n\n"
+        "Reply here to respond to the tenant.\n"
+        "Type *DONE* when finished to return them to the bot."
     )
-    logger.info("Handoff triggered | tenant=%s → staff=%s | reason=%s", tenant_number, staff_number, reason)
+    for staff_number in staff_numbers:
+        send_message(to=staff_number, body=notification)
+
+    logger.info("Handoff triggered | tenant=%s → staff=%s | reason=%s", tenant_number, staff_numbers, reason)
 
 
 def handle_staff_message(staff_number: str, body: str) -> None:
@@ -86,10 +84,11 @@ def handle_staff_message(staff_number: str, body: str) -> None:
     if body.strip().upper() == "DONE":
         conv = state.get(tenant_number)
         conv.status = "bot_active"
-        conv.assigned_staff = None
+        conv.assigned_staff = []
         conv.handed_off_at = None
 
-        send_message(to=staff_number, body="✅ Conversation returned to bot.")
+        for s in (conv.assigned_staff or [staff_number]):
+            send_message(to=s, body="✅ Conversation returned to bot.")
         send_message(
             to=tenant_number,
             body="Our team member has sorted that out for you. I'm back and happy to help with anything else! 😊",
@@ -106,6 +105,7 @@ def forward_to_staff(tenant_number: str, body: str) -> None:
     """Forward a tenant message to the assigned staff member during an active handoff."""
     conv = state.get(tenant_number)
     if conv.assigned_staff:
-        send_message(to=conv.assigned_staff, body=f"[Tenant] {body}")
+        for staff_number in conv.assigned_staff:
+            send_message(to=staff_number, body=f"[Tenant] {body}")
     else:
         logger.warning("Handoff active for %s but no assigned_staff", tenant_number)
