@@ -1,4 +1,4 @@
-// ── Types (unchanged — all components import from here) ───────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 export type Status = "handed_off" | "collecting_info" | "bot_active";
 export type Role = "user" | "assistant" | "staff";
@@ -28,20 +28,28 @@ export interface ChatDetail extends ChatSummary {
   history: Message[];
 }
 
-// Kept for TeamPanel type compatibility — not used with Railway backend
 export interface Member { id: string; full_name: string; email: string; role: "admin" | "agent" }
 export interface Shift { id: string; user_id: string; weekday: number; start_time: string; end_time: string }
+
+export interface StaffUser { email: string; name: string; role: "admin" | "agent" }
+
+
+// ── Token management ───────────────────────────────────────────────────────────
+
+const TOKEN_KEY = "lh_staff_token";
+const BASE = (import.meta.env["VITE_API_BASE_URL"] as string) ?? "";
+
+export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY);
+export const setToken = (t: string): void => { localStorage.setItem(TOKEN_KEY, t); };
+export const clearToken = (): void => { localStorage.removeItem(TOKEN_KEY); };
 
 
 // ── Core fetch helper ──────────────────────────────────────────────────────────
 
-const BASE = (import.meta.env["VITE_API_BASE_URL"] as string) ?? "";
-// Hidden API key — users never see or type this; auth is handled by Supabase
-const API_KEY = (import.meta.env["VITE_STAFF_DASHBOARD_TOKEN"] as string) ?? "";
-
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const token = getToken();
   const headers: Record<string, string> = {};
-  if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   const res = await fetch(`${BASE}${path}`, {
@@ -49,9 +57,47 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     headers,
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+
+  if (res.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error("Session expired");
+  }
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({})) as Record<string, unknown>;
+    throw new Error((detail["detail"] as string) ?? `${res.status} ${res.statusText}`);
+  }
   return res.json() as Promise<T>;
 }
+
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+
+export const adminExists = async (): Promise<boolean> => {
+  const r = await call<{ exists: boolean }>("POST", "/staff/auth/admin-exists");
+  return r.exists;
+};
+
+export const login = async (email: string, password: string): Promise<StaffUser> => {
+  const r = await call<{ token: string; name: string; role: string }>(
+    "POST", "/staff/auth/login", { email, password }
+  );
+  setToken(r.token);
+  return { email, name: r.name, role: r.role as "admin" | "agent" };
+};
+
+export const signup = async (email: string, name: string, password: string): Promise<StaffUser> => {
+  const r = await call<{ token: string; name: string; role: string }>(
+    "POST", "/staff/auth/signup", { email, name, password }
+  );
+  setToken(r.token);
+  return { email, name: r.name, role: r.role as "admin" | "agent" };
+};
+
+export const getMe = async (): Promise<StaffUser> =>
+  call<StaffUser>("GET", "/staff/auth/me");
+
+export const logout = (): void => { clearToken(); window.location.reload(); };
 
 
 // ── Chat list ──────────────────────────────────────────────────────────────────
@@ -75,15 +121,16 @@ export const sendMessage = async (phone: string, message: string): Promise<void>
 export const sendMedia = async (phone: string, file: File): Promise<void> => {
   const form = new FormData();
   form.append("file", file);
+  const token = getToken();
   const res = await fetch(`${BASE}/staff/chats/${phone}/media`, {
     method: "POST",
-    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,
   });
+  if (res.status === 401) { clearToken(); window.location.reload(); throw new Error("Unauthorized"); }
   if (!res.ok) throw new Error(`Media upload failed: ${res.status}`);
 };
 
-// Media is sent directly to WhatsApp — no stored URL to retrieve
 export const mediaUrl = async (_path: string): Promise<string | null> => null;
 
 
@@ -97,7 +144,6 @@ export const deleteChat = async (phone: string): Promise<void> => {
   await call("DELETE", `/staff/chats/${phone}`);
 };
 
-// Chat assignment is not supported by the Railway backend — no-op
 export const assignChat = async (_phone: string, _userId: string | null): Promise<void> => {};
 
 
@@ -108,7 +154,7 @@ export const inviteStaff = async (email: string, name: string): Promise<void> =>
 };
 
 
-// ── Team / shift stubs (TeamPanel is hidden — isAdmin is always false) ─────────
+// ── Team / shift stubs ─────────────────────────────────────────────────────────
 
 export const listMembers = async (): Promise<Member[]> => [];
 export const listShifts = async (): Promise<Shift[]> => [];
@@ -119,7 +165,7 @@ export const whoIsOnShift = async (): Promise<string | null> => null;
 export const simulateIncomingChat = async (): Promise<string | null> => null;
 
 
-// ── Sorting / display helpers (unchanged) ──────────────────────────────────────
+// ── Sorting / display helpers ──────────────────────────────────────────────────
 
 const ORDER: Record<Status, number> = { handed_off: 0, collecting_info: 1, bot_active: 2 };
 

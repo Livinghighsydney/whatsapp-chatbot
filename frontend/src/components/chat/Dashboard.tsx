@@ -1,41 +1,26 @@
 import { useEffect, useState } from "react";
-import { MessagesSquare } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-import type { Session } from "@supabase/supabase-js";
+import { Loader2, MessagesSquare } from "lucide-react";
+import { getToken, getMe, logout, type StaffUser } from "@/lib/api";
 import { Login } from "./Login";
 import { ChatList } from "./ChatList";
 import { ChatView } from "./ChatView";
 import { Settings } from "./Settings";
 
 export function Dashboard() {
-  const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const [isAdmin, setIsAdmin] = useState(false);
+  // undefined = still checking token, null = not logged in, object = logged in
+  const [user, setUser] = useState<StaffUser | null | undefined>(undefined);
   const [selected, setSelected] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
-    // Initial session check
-    supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      if (!s) { setIsAdmin(false); setSelected(null); }
-    });
-    return () => subscription.unsubscribe();
+    const token = getToken();
+    if (!token) { setUser(null); return; }
+    getMe()
+      .then(setUser)
+      .catch(() => { setUser(null); });
   }, []);
 
-  // Check admin role whenever session changes
-  useEffect(() => {
-    if (!session) { setIsAdmin(false); return; }
-    supabase
-      .rpc("has_role", { _role: "admin", _user_id: session.user.id })
-      .then(({ data }) => setIsAdmin(!!data));
-  }, [session?.user?.id]);
-
-  const handleLogout = () => supabase.auth.signOut();
-
-  // Loading — still checking session
-  if (session === undefined) {
+  if (user === undefined) {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-brand">
         <MessagesSquare className="h-12 w-12 animate-pulse text-brand-foreground" />
@@ -43,7 +28,11 @@ export function Dashboard() {
     );
   }
 
-  if (!session) return <Login />;
+  if (!user) {
+    return <Login onLogin={setUser} />;
+  }
+
+  const isAdmin = user.role === "admin";
 
   return (
     <>
@@ -57,7 +46,7 @@ export function Dashboard() {
             <ChatList
               selected={selected}
               onSelect={setSelected}
-              onLogout={handleLogout}
+              onLogout={logout}
               isAdmin={isAdmin}
               members={[]}
               onTeam={() => {}}
