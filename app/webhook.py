@@ -6,7 +6,7 @@ from fastapi.responses import PlainTextResponse
 from app.ai import get_reply, is_handoff
 from app.whatsapp import send_message, mark_read_and_typing
 from app import state
-from app.handoff import is_staff, trigger, handle_staff_message, forward_to_staff
+from app.handoff import is_staff, begin_collection, complete_collection, handle_staff_message, forward_to_staff
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -14,20 +14,28 @@ router = APIRouter()
 
 async def process_message(from_: str, body: str, message_id: str) -> None:
     try:
-        # ── Staff reply ────────────────────────────────────────────────────────
+        # ── Staff reply (Living High chat) ─────────────────────────────────────
         if is_staff(from_):
             handle_staff_message(from_, body)
             return
 
-        # Show read receipt + typing animation while bot prepares reply
         mark_read_and_typing(message_id)
-
         conv = state.get(from_)
+
+        # ── Tenant providing identity details (pre-handoff) ────────────────────
+        if conv.status == "collecting_info":
+            state.add_message(from_, "user", body)
+            complete_collection(from_, raw_reply=body)
+            return
 
         # ── Tenant message during active handoff ───────────────────────────────
         if conv.status == "handed_off":
             state.add_message(from_, "user", body)
             forward_to_staff(from_, body)
+            send_message(
+                to=from_,
+                body="Our team has been notified — they'll reach out to you directly shortly. 🙏",
+            )
             return
 
         # ── Normal bot flow ────────────────────────────────────────────────────
@@ -36,7 +44,7 @@ async def process_message(from_: str, body: str, message_id: str) -> None:
 
         if handoff:
             state.add_message(from_, "user", body)
-            trigger(from_, reason)
+            begin_collection(from_, reason)
         else:
             state.add_message(from_, "user", body)
             state.add_message(from_, "assistant", reply)

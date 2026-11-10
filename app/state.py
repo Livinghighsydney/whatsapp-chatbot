@@ -3,24 +3,54 @@
 Resets on process restart — acceptable for MVP. Upgrade to Redis when
 running multiple workers or needing persistence across deploys.
 """
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
 
+# ── Data models ────────────────────────────────────────────────────────────────
+
+@dataclass
+class TenantInfo:
+    name: str = ""
+    property_address: str = ""
+    room: str = ""
+
+    def display(self, phone: str) -> str:
+        """Human-readable label for use in staff notifications."""
+        parts = [p for p in (self.name, self.property_address, self.room) if p]
+        return " | ".join(parts) if parts else f"+{phone}"
+
+
 @dataclass
 class Conversation:
-    status: Literal["bot_active", "handed_off"] = "bot_active"
+    # State machine: bot_active → collecting_info → handed_off → bot_active
+    status: Literal["bot_active", "collecting_info", "handed_off"] = "bot_active"
+
+    # Populated during collecting_info, persisted for the lifetime of the session
+    tenant_info: TenantInfo = field(default_factory=TenantInfo)
+
+    # Reason captured when bot first detects it needs to hand off
+    handoff_reason: str = ""
+
+    # Short ID assigned at handoff (T1, T2…) used in DONE commands
+    session_id: str = ""
+
     assigned_staff: list[str] = field(default_factory=list)
     handed_off_at: datetime | None = None
-    # Role: "user" (tenant), "assistant" (bot), "staff" (human agent)
+
+    # Chronological message log — roles: "user", "assistant", "staff"
     history: list[dict] = field(default_factory=list)
-    # Staff numbers that have already received the conversation history dump
+
+    # Tracks which staff numbers have already received the initial history brief
     staff_history_sent: set = field(default_factory=set)
 
 
-_store: dict[str, Conversation] = {}
+# ── Store ──────────────────────────────────────────────────────────────────────
 
+_store: dict[str, Conversation] = {}
 MAX_HISTORY = 20
 
 
@@ -37,9 +67,47 @@ def add_message(phone: str, role: str, content: str) -> None:
         conv.history = conv.history[-MAX_HISTORY:]
 
 
-def find_tenant_for_staff(staff_number: str) -> str | None:
-    """Return the tenant number currently assigned to this staff member."""
-    for phone, conv in _store.items():
-        if conv.status == "handed_off" and staff_number in conv.assigned_staff:
-            return phone
-    return None
+# ── Session registry ───────────────────────────────────────────────────────────
+# Maps short session IDs (T1, T2…) → tenant phone numbers so staff can type
+# "DONE T1" rather than a full phone number.
+
+_session_counter: int = 0
+_session_map: dict[str, str] = {}  # session_id → tenant_phone
+
+
+def new_session(phone: str) -> str:
+    global _session_counter
+    _session_counter += 1
+    sid = f"T{_session_counter}"
+    _session_map[sid] = phone
+    return sid
+
+
+def find_tenant_by_session(session_id: str) -> str | None:
+    return _session_map.get(session_id.upper())
+
+
+# ── Queries ────────────────────────────────────────────────────────────────────
+
+def find_active_handoffs_for_staff(staff_number: str) -> list[tuple[str, Conversation]]:
+    """Return all (phone, conversation) pairs currently handed off to this staff member."""
+    return [
+        (phone, conv)
+        for phone, conv in _store.items()
+        if conv.status == "handed_off" and staff_number in conv.assigned_staff
+    ]
+
+
+# ── Mutations ──────────────────────────────────────────────────────────────────
+
+def resolve(phone: str) -> None:
+    """Reset a handed-off conversation back to bot control."""
+    conv = get(phone)
+    _session_map.pop(conv.session_id, None)
+    conv.status = "bot_active"
+    conv.session_id = ""
+    conv.assigned_staff = []
+    conv.handed_off_at = None
+    conv.staff_history_sent = set()
+    conv.handoff_reason = ""
+    # Intentionally keep tenant_info — avoids re-asking if they message again
