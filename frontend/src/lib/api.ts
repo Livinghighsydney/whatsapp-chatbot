@@ -33,48 +33,25 @@ export interface Member { id: string; full_name: string; email: string; role: "a
 export interface Shift { id: string; user_id: string; weekday: number; start_time: string; end_time: string }
 
 
-// ── Token management ───────────────────────────────────────────────────────────
-
-const TOKEN_KEY = "staff_token";
-const BASE = (import.meta.env.VITE_API_BASE_URL as string) ?? "";
-
-export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY);
-export const setToken = (t: string): void => { localStorage.setItem(TOKEN_KEY, t); };
-export const clearToken = (): void => { localStorage.removeItem(TOKEN_KEY); };
-
-
 // ── Core fetch helper ──────────────────────────────────────────────────────────
 
+const BASE = (import.meta.env["VITE_API_BASE_URL"] as string) ?? "";
+// Hidden API key — users never see or type this; auth is handled by Supabase
+const API_KEY = (import.meta.env["VITE_STAFF_DASHBOARD_TOKEN"] as string) ?? "";
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    headers,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
-  if (res.status === 401) {
-    clearToken();
-    window.location.reload();
-    throw new Error("Session expired — please sign in again");
-  }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json() as Promise<T>;
 }
-
-
-// ── Auth ───────────────────────────────────────────────────────────────────────
-
-export const verifyToken = async (token: string): Promise<void> => {
-  const res = await fetch(`${BASE}/staff/auth/verify`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error("Invalid access token");
-  setToken(token);
-};
 
 
 // ── Chat list ──────────────────────────────────────────────────────────────────
@@ -98,14 +75,11 @@ export const sendMessage = async (phone: string, message: string): Promise<void>
 export const sendMedia = async (phone: string, file: File): Promise<void> => {
   const form = new FormData();
   form.append("file", file);
-  const token = getToken();
-  // Do NOT set Content-Type — browser sets it automatically with the correct boundary
   const res = await fetch(`${BASE}/staff/chats/${phone}/media`, {
     method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
     body: form,
   });
-  if (res.status === 401) { clearToken(); window.location.reload(); throw new Error("Unauthorized"); }
   if (!res.ok) throw new Error(`Media upload failed: ${res.status}`);
 };
 
@@ -125,6 +99,13 @@ export const deleteChat = async (phone: string): Promise<void> => {
 
 // Chat assignment is not supported by the Railway backend — no-op
 export const assignChat = async (_phone: string, _userId: string | null): Promise<void> => {};
+
+
+// ── Invite ─────────────────────────────────────────────────────────────────────
+
+export const inviteStaff = async (email: string, name: string): Promise<void> => {
+  await call("POST", "/staff/invite", { email, name });
+};
 
 
 // ── Team / shift stubs (TeamPanel is hidden — isAdmin is always false) ─────────

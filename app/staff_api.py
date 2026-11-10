@@ -23,6 +23,7 @@ import httpx
 
 from app import state
 from app.whatsapp import send_message, send_media_message
+from app.email import send_invite
 
 router = APIRouter(prefix="/staff", tags=["staff"])
 logger = logging.getLogger(__name__)
@@ -148,6 +149,37 @@ def delete_chat(phone: str, _: str = Depends(_require_auth)):
     """Remove a conversation entirely from memory."""
     state._store.pop(phone, None)
     logger.info("Chat deleted via dashboard | phone=%s", phone)
+    return {"ok": True}
+
+
+# ── Invite ────────────────────────────────────────────────────────────────────
+
+class _InviteBody(BaseModel):
+    email: str
+    name: str = ""
+
+
+@router.post("/invite")
+def invite_member(body: _InviteBody, _: str = Depends(_require_auth)):
+    """Send a Resend invite email so a new staff member can sign up."""
+    if not body.email.strip():
+        raise HTTPException(400, "email is required")
+
+    dashboard_url = os.environ.get("DASHBOARD_URL", "").rstrip("/")
+    if not dashboard_url:
+        raise HTTPException(503, "DASHBOARD_URL is not configured")
+
+    import urllib.parse
+    params = urllib.parse.urlencode({"invite": "1", "email": body.email.strip()})
+    invite_url = f"{dashboard_url}?{params}"
+
+    try:
+        send_invite(to_email=body.email.strip(), to_name=body.name.strip(), invite_url=invite_url)
+    except Exception as exc:
+        logger.error("Failed to send invite | %s", exc)
+        raise HTTPException(502, f"Email delivery failed: {exc}") from exc
+
+    logger.info("Invite sent | to=%s", body.email)
     return {"ok": True}
 
 
