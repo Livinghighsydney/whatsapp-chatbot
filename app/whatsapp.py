@@ -50,6 +50,19 @@ def send_template(to: str, template_name: str, variables: list[str], language: s
     logger.info("Template sent | to=%s | template=%s", to_clean, template_name)
 
 
+def send_media_message(to: str, media_id: str, media_type: str) -> None:
+    """Send a pre-uploaded media file to a recipient using its Meta media ID."""
+    to_clean = to.replace("whatsapp:", "").replace("+", "")
+    # media_type is one of: image, video, audio, document
+    _post({
+        "messaging_product": "whatsapp",
+        "to": to_clean,
+        "type": media_type,
+        media_type: {"id": media_id},
+    })
+    logger.info("Media sent | to=%s | type=%s | media_id=%s", to_clean, media_type, media_id)
+
+
 def mark_read_and_typing(message_id: str) -> None:
     """Mark incoming message as read and show typing indicator.
 

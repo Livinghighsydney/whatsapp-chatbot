@@ -60,9 +60,17 @@ def get(phone: str) -> Conversation:
     return _store[phone]
 
 
-def add_message(phone: str, role: str, content: str) -> None:
+def add_message(phone: str, role: str, content: str, media_type: str | None = None) -> None:
+    from datetime import timezone
     conv = get(phone)
-    conv.history.append({"role": role, "content": content})
+    msg: dict = {
+        "role": role,
+        "content": content,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    if media_type:
+        msg["media_type"] = media_type
+    conv.history.append(msg)
     if len(conv.history) > MAX_HISTORY:
         conv.history = conv.history[-MAX_HISTORY:]
 
