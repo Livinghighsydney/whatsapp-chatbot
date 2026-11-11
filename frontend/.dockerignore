@@ -1,0 +1,8 @@
+node_modules
+.output
+.git
+*.log
+.env
+.env.*
+frontend.zip
+bun.lock
