@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
-import { Loader2, MessagesSquare } from "lucide-react";
-import { getToken, getMe, logout, type StaffUser } from "@/lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { MessagesSquare } from "lucide-react";
+import { getToken, getMe, logout, listMembers, type StaffUser } from "@/lib/api";
 import { Login } from "./Login";
 import { ChatList } from "./ChatList";
 import { ChatView } from "./ChatView";
 import { Settings } from "./Settings";
 
 export function Dashboard() {
-  // undefined = still checking token, null = not logged in, object = logged in
   const [user, setUser] = useState<StaffUser | null | undefined>(undefined);
   const [selected, setSelected] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -19,6 +19,12 @@ export function Dashboard() {
       .then(setUser)
       .catch(() => { setUser(null); });
   }, []);
+
+  const { data: members = [] } = useQuery({
+    queryKey: ["users"],
+    queryFn: listMembers,
+    enabled: !!user,
+  });
 
   if (user === undefined) {
     return (
@@ -48,8 +54,8 @@ export function Dashboard() {
               onSelect={setSelected}
               onLogout={logout}
               isAdmin={isAdmin}
-              members={[]}
-              onTeam={() => {}}
+              members={members}
+              onTeam={() => setShowSettings(true)}
               onSettings={() => setShowSettings(true)}
             />
           </aside>
@@ -65,7 +71,7 @@ export function Dashboard() {
                 phone={selected}
                 onBack={() => setSelected(null)}
                 isAdmin={isAdmin}
-                members={[]}
+                members={members}
               />
             ) : (
               <div className="chat-wall flex h-full flex-col items-center justify-center gap-4 text-center text-muted-foreground">
@@ -82,7 +88,7 @@ export function Dashboard() {
         </div>
       </div>
 
-      <Settings open={showSettings} onClose={() => setShowSettings(false)} />
+      <Settings open={showSettings} onClose={() => setShowSettings(false)} isAdmin={isAdmin} />
     </>
   );
 }

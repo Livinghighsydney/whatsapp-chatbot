@@ -10,8 +10,8 @@ export function Login({ onLogin }: LoginProps) {
   const params = new URLSearchParams(window.location.search);
   const isInviteMode = params.get("invite") === "1";
   const inviteEmail = params.get("email") ?? "";
+  const inviteRole = (params.get("role") ?? "agent") as "admin" | "agent";
 
-  // null = no admin yet (show setup), false = admin exists (show sign in), true = show sign up
   const [mode, setMode] = useState<"loading" | "signin" | "signup">(
     isInviteMode ? "signup" : "loading"
   );
@@ -34,7 +34,7 @@ export function Login({ onLogin }: LoginProps) {
     try {
       let user: StaffUser;
       if (mode === "signup") {
-        user = await signup(email.trim(), name.trim(), pw);
+        user = await signup(email.trim(), name.trim(), pw, inviteRole);
       } else {
         user = await login(email.trim(), pw);
       }

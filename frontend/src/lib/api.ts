@@ -1,6 +1,6 @@
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type Status = "handed_off" | "collecting_info" | "bot_active";
+export type Status = "handed_off" | "collecting_info" | "bot_active" | "resolved";
 export type Role = "user" | "assistant" | "staff";
 
 export interface ChatSummary {
@@ -14,6 +14,7 @@ export interface ChatSummary {
   last_role?: Role | null;
   last_ts?: string | null;
   assigned_to?: string | null;
+  assigned_to_name?: string | null;
 }
 
 export interface Message {
@@ -28,10 +29,30 @@ export interface ChatDetail extends ChatSummary {
   history: Message[];
 }
 
-export interface Member { id: string; full_name: string; email: string; role: "admin" | "agent" }
-export interface Shift { id: string; user_id: string; weekday: number; start_time: string; end_time: string }
+export interface Member {
+  id: string;
+  full_name: string;
+  email: string;
+  role: "admin" | "agent";
+  whatsapp_number?: string | null;
+}
+
+export interface Shift {
+  id: string;
+  staff_user_id: string;
+  weekday: number;
+  start_time: string;
+  end_time: string;
+  staff_name?: string;
+  staff_email?: string;
+}
 
 export interface StaffUser { email: string; name: string; role: "admin" | "agent" }
+
+export type HandoffMode = "dashboard" | "whatsapp";
+
+// Monday=0 … Sunday=6 (ISO weekday)
+export const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 
 // ── Token management ───────────────────────────────────────────────────────────
@@ -86,9 +107,15 @@ export const login = async (email: string, password: string): Promise<StaffUser>
   return { email, name: r.name, role: r.role as "admin" | "agent" };
 };
 
-export const signup = async (email: string, name: string, password: string): Promise<StaffUser> => {
+export const signup = async (
+  email: string,
+  name: string,
+  password: string,
+  role: string = "agent",
+  whatsapp_number?: string,
+): Promise<StaffUser> => {
   const r = await call<{ token: string; name: string; role: string }>(
-    "POST", "/staff/auth/signup", { email, name, password }
+    "POST", "/staff/auth/signup", { email, name, password, role, whatsapp_number }
   );
   setToken(r.token);
   return { email, name: r.name, role: r.role as "admin" | "agent" };
@@ -144,34 +171,71 @@ export const deleteChat = async (phone: string): Promise<void> => {
   await call("DELETE", `/staff/chats/${phone}`);
 };
 
-export const assignChat = async (_phone: string, _userId: string | null): Promise<void> => {};
+export const assignChat = async (phone: string, staffId: string | null): Promise<void> => {
+  await call("POST", `/staff/chats/${phone}/assign`, { staff_id: staffId });
+};
+
+
+// ── Users ──────────────────────────────────────────────────────────────────────
+
+export const listMembers = async (): Promise<Member[]> =>
+  call<Member[]>("GET", "/staff/users");
+
+export const deleteUser = async (userId: string): Promise<void> => {
+  await call("DELETE", `/staff/users/${userId}`);
+};
 
 
 // ── Invite ─────────────────────────────────────────────────────────────────────
 
-export const inviteStaff = async (email: string, name: string): Promise<void> => {
-  await call("POST", "/staff/invite", { email, name });
+export const inviteStaff = async (
+  email: string,
+  name: string,
+  role: "admin" | "agent",
+  whatsapp_number?: string,
+): Promise<void> => {
+  await call("POST", "/staff/invite", { email, name, role, whatsapp_number });
 };
 
 
-// ── Team / shift stubs ─────────────────────────────────────────────────────────
+// ── Handoff mode ───────────────────────────────────────────────────────────────
 
-export const listMembers = async (): Promise<Member[]> => [];
-export const listShifts = async (): Promise<Shift[]> => [];
-export const addShift = async (_s: Omit<Shift, "id">): Promise<void> => {};
-export const deleteShift = async (_id: string): Promise<void> => {};
-export const assignWaiting = async (): Promise<number> => 0;
-export const whoIsOnShift = async (): Promise<string | null> => null;
-export const simulateIncomingChat = async (): Promise<string | null> => null;
+export const getHandoffMode = async (): Promise<HandoffMode> => {
+  const r = await call<{ mode: string }>("GET", "/staff/settings/handoff-mode");
+  return r.mode as HandoffMode;
+};
+
+export const setHandoffMode = async (mode: HandoffMode): Promise<void> => {
+  await call("PUT", "/staff/settings/handoff-mode", { mode });
+};
+
+
+// ── Shifts ─────────────────────────────────────────────────────────────────────
+
+export const listShifts = async (): Promise<Shift[]> =>
+  call<Shift[]>("GET", "/staff/shifts");
+
+export const addShift = async (s: Omit<Shift, "id" | "staff_name" | "staff_email">): Promise<void> => {
+  await call("POST", "/staff/shifts", s);
+};
+
+export const deleteShift = async (id: string): Promise<void> => {
+  await call("DELETE", `/staff/shifts/${id}`);
+};
 
 
 // ── Sorting / display helpers ──────────────────────────────────────────────────
 
-const ORDER: Record<Status, number> = { handed_off: 0, collecting_info: 1, bot_active: 2 };
+const ORDER: Partial<Record<Status, number>> = {
+  handed_off: 0,
+  collecting_info: 1,
+  bot_active: 2,
+  resolved: 3,
+};
 
 export function sortChats(chats: ChatSummary[]) {
   return [...chats].sort((a, b) =>
-    (ORDER[a.status] ?? 3) - (ORDER[b.status] ?? 3) ||
+    (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) ||
     new Date(b.last_ts ?? 0).getTime() - new Date(a.last_ts ?? 0).getTime()
   );
 }
@@ -199,5 +263,3 @@ export const formatMsgTime = (ts: string) => {
   const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return today ? t : `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${t}`;
 };
-
-export const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

@@ -5,51 +5,79 @@ from fastapi.responses import PlainTextResponse
 
 from app.ai import get_reply, is_handoff
 from app.whatsapp import send_message, mark_read_and_typing
-from app import state
-from app.handoff import is_staff, begin_collection, complete_collection, handle_staff_message, forward_to_staff
+from app import db_conversations as dbc
+from app.handoff import trigger, is_staff, handle_staff_whatsapp_message, forward_to_staff, get_mode
+from app.structured import extract_tenant_info
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_INFO_PROMPT = (
+    "Hi! I'm the Living High assistant. 👋\n\n"
+    "Before I help, could you quickly share your *name*, *property address*, "
+    "and *room number*? 🙏"
+)
+
 
 async def process_message(from_: str, body: str, message_id: str) -> None:
     try:
-        # ── Staff reply (Living High chat) ─────────────────────────────────────
-        if is_staff(from_):
-            handle_staff_message(from_, body)
-            return
-
         mark_read_and_typing(message_id)
-        conv = state.get(from_)
 
-        # ── Tenant providing identity details (pre-handoff) ────────────────────
-        if conv.status == "collecting_info":
-            state.add_message(from_, "user", body)
-            complete_collection(from_, raw_reply=body)
+        # Staff messaging via WhatsApp (WhatsApp mode only — DONE T1 etc.)
+        if get_mode() == "whatsapp" and is_staff(from_):
+            handle_staff_whatsapp_message(from_, body)
             return
 
-        # ── Tenant message during active handoff ───────────────────────────────
-        if conv.status == "handed_off":
-            state.add_message(from_, "user", body)
-            forward_to_staff(from_, body)
+        conv = dbc.get_or_create(from_)
+        dbc.add_message(from_, "user", body)
+
+        # Active handoff — tenant sent another message
+        if conv["status"] == "handed_off":
+            if get_mode() == "whatsapp":
+                forward_to_staff(from_, body)
             send_message(
                 to=from_,
-                body="Our team has been notified — they'll reach out to you directly shortly. 🙏",
+                body="Our team has been notified and will be with you shortly. 🙏",
             )
             return
 
-        # ── Normal bot flow ────────────────────────────────────────────────────
-        reply = await get_reply(body, history=conv.history)
+        # Collecting tenant identity details
+        if conv["status"] == "collecting_info":
+            info = await extract_tenant_info(body)
+            dbc.update(
+                from_,
+                tenant_name=info.get("name"),
+                property_address=info.get("property_address"),
+                room=info.get("room"),
+                info_collected=True,
+                status="bot_active",
+            )
+            name = info.get("name") or "there"
+            reply = f"Thanks {name}! 😊 How can I help you today?"
+            dbc.add_message(from_, "assistant", reply)
+            send_message(to=from_, body=reply)
+            return
+
+        # First ever message from this tenant — start proactive info collection
+        if not conv["info_collected"]:
+            dbc.update(from_, status="collecting_info")
+            dbc.add_message(from_, "assistant", _INFO_PROMPT)
+            send_message(to=from_, body=_INFO_PROMPT)
+            return
+
+        # Normal bot flow
+        history = dbc.get_history(from_)
+        # Re-fetch conv to get latest tenant info for Claude context
+        conv = dbc.get_or_create(from_)
+        reply = await get_reply(body, history=history, conv=conv)
         handoff, reason = is_handoff(reply)
 
         if handoff:
-            state.add_message(from_, "user", body)
-            begin_collection(from_, reason)
+            trigger(from_, reason)
         else:
-            state.add_message(from_, "user", body)
-            state.add_message(from_, "assistant", reply)
+            dbc.add_message(from_, "assistant", reply)
             send_message(to=from_, body=reply)
-            logger.info("Replied | to=%s | body=%s", from_, reply)
+            logger.info("Replied | to=%s", from_)
 
     except Exception:
         logger.exception("Failed to process message from %s", from_)
@@ -70,27 +98,20 @@ async def verify_webhook(request: Request):
 @router.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
-
     try:
         entry = data["entry"][0]
         changes = entry["changes"][0]["value"]
         messages = changes.get("messages")
-
         if not messages:
             return {"status": "ok"}
-
         message = messages[0]
         if message.get("type") != "text":
             return {"status": "ok"}
-
         from_ = message["from"]
         body = message["text"]["body"]
         message_id = message["id"]
-
         logger.info("Incoming | from=%s | body=%s", from_, body)
         background_tasks.add_task(process_message, from_, body, message_id)
-
     except (KeyError, IndexError):
         pass
-
     return {"status": "ok"}

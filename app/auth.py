@@ -58,13 +58,20 @@ def login(email: str, password: str) -> dict | None:
     return {"email": email_db, "name": name, "role": role}
 
 
-def create_user(email: str, name: str, password: str, role: str = "agent") -> None:
+def create_user(
+    email: str,
+    name: str,
+    password: str,
+    role: str = "agent",
+    whatsapp_number: str | None = None,
+) -> None:
     pw_hash = hash_password(password)
     with db.conn() as c:
         cur = c.cursor()
         cur.execute(
-            "INSERT INTO staff_users (email, name, password_hash, role) VALUES (%s, %s, %s, %s)",
-            (email.lower().strip(), name.strip(), pw_hash, role),
+            "INSERT INTO staff_users (email, name, password_hash, role, whatsapp_number) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (email.lower().strip(), name.strip(), pw_hash, role, whatsapp_number or None),
         )
 
 
@@ -80,3 +87,31 @@ def any_admin_exists() -> bool:
         cur = c.cursor()
         cur.execute("SELECT 1 FROM staff_users WHERE role = 'admin' LIMIT 1")
         return cur.fetchone() is not None
+
+
+def list_users() -> list[dict]:
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute(
+            "SELECT id::text, email, name, role, whatsapp_number "
+            "FROM staff_users ORDER BY created_at ASC"
+        )
+        return [
+            dict(zip(["id", "email", "name", "role", "whatsapp_number"], row))
+            for row in cur.fetchall()
+        ]
+
+
+def delete_user(user_id: str) -> bool:
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute("DELETE FROM staff_users WHERE id = %s", [user_id])
+        return cur.rowcount > 0
+
+
+def get_user_id(email: str) -> str | None:
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute("SELECT id::text FROM staff_users WHERE email = %s", [email.lower().strip()])
+        row = cur.fetchone()
+        return row[0] if row else None

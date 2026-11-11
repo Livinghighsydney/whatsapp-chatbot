@@ -1,4 +1,4 @@
-"""Staff dashboard API — JWT auth via Neon PostgreSQL."""
+"""Staff dashboard API — JWT auth, DB-backed conversations, shifts, settings."""
 from __future__ import annotations
 
 import os
@@ -11,9 +11,12 @@ from jose import JWTError
 from pydantic import BaseModel
 import httpx
 
-from app import state, auth
+from app import auth
+from app import db_conversations as dbc
+from app import shifts as shifts_mod
 from app.whatsapp import send_message, send_media_message
 from app.email import send_invite
+from app.handoff import resolve as resolve_handoff
 
 router = APIRouter(prefix="/staff", tags=["staff"])
 logger = logging.getLogger(__name__)
@@ -46,90 +49,145 @@ class _SignupBody(BaseModel):
     email: str
     name: str
     password: str
+    role: str = "agent"
+    whatsapp_number: str | None = None
 
 
 @router.post("/auth/login")
 def login(body: _LoginBody):
-    """Email + password → JWT token."""
     user = auth.login(body.email, body.password)
     if not user:
         raise HTTPException(401, "Wrong email or password")
     token = auth.create_token(user["email"], user["name"], user["role"])
-    logger.info("Login | email=%s", user["email"])
     return {"token": token, "name": user["name"], "role": user["role"]}
 
 
 @router.get("/auth/me")
 def me(payload: dict = Depends(_require_auth)):
-    """Return the current user's profile from the JWT."""
-    return {"email": payload["sub"], "name": payload.get("name", ""), "role": payload.get("role", "agent")}
+    return {
+        "email": payload["sub"],
+        "name": payload.get("name", ""),
+        "role": payload.get("role", "agent"),
+    }
 
 
 @router.post("/auth/signup")
 def signup(body: _SignupBody):
-    """
-    Create a new staff account. Allowed when:
-    - No admin exists yet (first-time setup), OR
-    - Request arrives with ?invite=1 query param (from invite email link).
-    Admin-only account creation is handled by /staff/invite.
-    """
     if auth.user_exists(body.email):
         raise HTTPException(409, "An account with this email already exists")
-
-    role = "admin" if not auth.any_admin_exists() else "agent"
-    auth.create_user(body.email, body.name, body.password, role)
+    # First user ever becomes admin regardless of requested role
+    role = "admin" if not auth.any_admin_exists() else body.role
+    if role not in ("admin", "agent"):
+        role = "agent"
+    auth.create_user(body.email, body.name, body.password, role, body.whatsapp_number)
     user = auth.login(body.email, body.password)
     token = auth.create_token(user["email"], user["name"], user["role"])
-    logger.info("Signup | email=%s | role=%s", body.email, role)
     return {"token": token, "name": user["name"], "role": user["role"]}
 
 
 @router.post("/auth/admin-exists")
 def admin_exists():
-    """Returns whether any admin account exists (used by login page to show setup form)."""
     return {"exists": auth.any_admin_exists()}
+
+
+# ── Users ──────────────────────────────────────────────────────────────────────
+
+@router.get("/users")
+def list_users(_: dict = Depends(_require_auth)):
+    users = auth.list_users()
+    # Reshape to match the Member type the frontend expects
+    return [
+        {
+            "id": u["id"],
+            "full_name": u["name"],
+            "email": u["email"],
+            "role": u["role"],
+            "whatsapp_number": u["whatsapp_number"],
+        }
+        for u in users
+    ]
+
+
+@router.delete("/users/{user_id}")
+def delete_user(user_id: str, payload: dict = Depends(_require_admin)):
+    if not auth.delete_user(user_id):
+        raise HTTPException(404, "User not found")
+    return {"ok": True}
+
+
+# ── Handoff mode ───────────────────────────────────────────────────────────────
+
+@router.get("/settings/handoff-mode")
+def get_handoff_mode(_: dict = Depends(_require_auth)):
+    return {"mode": dbc.get_setting("handoff_mode", "dashboard")}
+
+
+class _ModeBody(BaseModel):
+    mode: str
+
+
+@router.put("/settings/handoff-mode")
+def set_handoff_mode(body: _ModeBody, _: dict = Depends(_require_admin)):
+    if body.mode not in ("dashboard", "whatsapp"):
+        raise HTTPException(400, "mode must be 'dashboard' or 'whatsapp'")
+    dbc.set_setting("handoff_mode", body.mode)
+    return {"mode": body.mode}
+
+
+# ── Shifts ─────────────────────────────────────────────────────────────────────
+
+@router.get("/shifts")
+def list_shifts(_: dict = Depends(_require_auth)):
+    return shifts_mod.list_all()
+
+
+class _ShiftBody(BaseModel):
+    staff_user_id: str
+    weekday: int
+    start_time: str  # "HH:MM"
+    end_time: str    # "HH:MM"
+
+
+@router.post("/shifts", status_code=201)
+def add_shift(body: _ShiftBody, _: dict = Depends(_require_admin)):
+    if not (0 <= body.weekday <= 6):
+        raise HTTPException(400, "weekday must be 0–6")
+    shift_id = shifts_mod.add(
+        body.staff_user_id, body.weekday, body.start_time, body.end_time
+    )
+    return {"id": shift_id}
+
+
+@router.delete("/shifts/{shift_id}")
+def delete_shift(shift_id: str, _: dict = Depends(_require_admin)):
+    if not shifts_mod.delete(shift_id):
+        raise HTTPException(404, "Shift not found")
+    return {"ok": True}
 
 
 # ── Chat list ──────────────────────────────────────────────────────────────────
 
 @router.get("/chats")
-def list_chats(_: dict = Depends(_require_auth)):
-    _STATUS_ORDER = {"handed_off": 0, "collecting_info": 1, "bot_active": 2}
-    chats = []
-    for phone, conv in state._store.items():
-        last = conv.history[-1] if conv.history else None
-        chats.append({
-            "phone": phone,
-            "name": conv.tenant_info.name or f"+{phone}",
-            "property": conv.tenant_info.property_address,
-            "room": conv.tenant_info.room,
-            "status": conv.status,
-            "session_id": conv.session_id,
-            "last_message": last.get("content", "") if last else "",
-            "last_role": last.get("role", "") if last else "",
-            "last_ts": last.get("ts", "") if last else "",
-            "message_count": len(conv.history),
-        })
-    chats.sort(key=lambda c: c["last_ts"], reverse=True)
-    chats.sort(key=lambda c: _STATUS_ORDER.get(c["status"], 9))
-    return chats
+def list_chats(payload: dict = Depends(_require_auth)):
+    is_admin = payload.get("role") == "admin"
+    if is_admin:
+        return dbc.list_for_dashboard()
+    staff_id = auth.get_user_id(payload["sub"])
+    return dbc.list_for_dashboard(staff_id=staff_id)
 
 
 # ── Single conversation ────────────────────────────────────────────────────────
 
 @router.get("/chats/{phone}")
 def get_chat(phone: str, _: dict = Depends(_require_auth)):
-    conv = state.get(phone)
-    return {
-        "phone": phone,
-        "name": conv.tenant_info.name or f"+{phone}",
-        "property": conv.tenant_info.property_address,
-        "room": conv.tenant_info.room,
-        "status": conv.status,
-        "session_id": conv.session_id,
-        "handed_off_at": conv.handed_off_at.isoformat() if conv.handed_off_at else None,
-        "history": conv.history,
-    }
+    conv = dbc.get_detail(phone)
+    if not conv:
+        # Return empty shell so the frontend doesn't crash on a first visit
+        return {
+            "phone": phone, "name": None, "property": None, "room": None,
+            "status": "bot_active", "session_id": None, "history": [],
+        }
+    return conv
 
 
 # ── Send messages ──────────────────────────────────────────────────────────────
@@ -143,8 +201,8 @@ def send_text(phone: str, body: _TextBody, _: dict = Depends(_require_auth)):
     if not body.message.strip():
         raise HTTPException(400, "Message cannot be empty")
     send_message(to=phone, body=body.message)
-    state.add_message(phone, "staff", body.message)
-    logger.info("Dashboard text | to=%s", phone)
+    dbc.add_message(phone, "staff", body.message)
+    logger.info("Dashboard reply | to=%s", phone)
     return {"ok": True}
 
 
@@ -154,8 +212,7 @@ async def send_media(phone: str, file: UploadFile = File(...), _: dict = Depends
     media_type = _classify(file.content_type or "application/octet-stream")
     media_id = await _upload_to_meta(content, file.content_type or "application/octet-stream", file.filename or "file")
     send_media_message(to=phone, media_id=media_id, media_type=media_type)
-    state.add_message(phone, "staff", f"[{media_type}: {file.filename}]", media_type=media_type)
-    logger.info("Dashboard media | to=%s | type=%s", phone, media_type)
+    dbc.add_message(phone, "staff", f"[{media_type}: {file.filename}]")
     return {"ok": True, "media_type": media_type}
 
 
@@ -163,19 +220,39 @@ async def send_media(phone: str, file: UploadFile = File(...), _: dict = Depends
 
 @router.post("/chats/{phone}/resolve")
 def resolve(phone: str, _: dict = Depends(_require_auth)):
-    conv = state.get(phone)
-    if conv.status != "handed_off":
+    conv = dbc.get_or_create(phone)
+    if conv["status"] != "handed_off":
         raise HTTPException(400, "Conversation is not currently in handoff")
-    state.resolve(phone)
-    send_message(to=phone, body="Our team has sorted that out for you. I'm back and happy to help with anything else! 😊")
-    logger.info("Handoff resolved | phone=%s", phone)
+    resolve_handoff(phone)
+    send_message(
+        to=phone,
+        body="Our team has sorted that out for you. I'm back and happy to help with anything else! 😊",
+    )
+    return {"ok": True}
+
+
+@router.post("/chats/{phone}/assign")
+def assign_chat(phone: str, body: dict, payload: dict = Depends(_require_auth)):
+    staff_id = body.get("staff_id")
+    dbc.update(phone, assigned_staff_id=staff_id)
     return {"ok": True}
 
 
 @router.delete("/chats/{phone}")
 def delete_chat(phone: str, _: dict = Depends(_require_auth)):
-    state._store.pop(phone, None)
-    logger.info("Chat deleted | phone=%s", phone)
+    # Soft delete: reset to bot_active with no history (delete messages)
+    conv = dbc.get_or_create(phone)
+    if conv.get("id"):
+        from app import db
+        with db.conn() as c:
+            cur = c.cursor()
+            cur.execute("DELETE FROM messages WHERE conversation_id = %s", [conv["id"]])
+        dbc.update(
+            phone,
+            status="bot_active", session_id=None, assigned_staff_id=None,
+            handoff_reason=None, info_collected=False,
+            tenant_name=None, property_address=None, room=None,
+        )
     return {"ok": True}
 
 
@@ -184,6 +261,8 @@ def delete_chat(phone: str, _: dict = Depends(_require_auth)):
 class _InviteBody(BaseModel):
     email: str
     name: str = ""
+    role: str = "agent"
+    whatsapp_number: str | None = None
 
 
 @router.post("/invite")
@@ -194,16 +273,21 @@ def invite_member(body: _InviteBody, _: dict = Depends(_require_admin)):
     if not dashboard_url:
         raise HTTPException(503, "DASHBOARD_URL is not configured")
 
-    params = urllib.parse.urlencode({"invite": "1", "email": body.email.strip()})
+    role = body.role if body.role in ("admin", "agent") else "agent"
+    params = urllib.parse.urlencode({
+        "invite": "1",
+        "email": body.email.strip(),
+        "role": role,
+    })
     invite_url = f"{dashboard_url}?{params}"
 
     try:
         send_invite(to_email=body.email.strip(), to_name=body.name.strip(), invite_url=invite_url)
     except Exception as exc:
-        logger.error("Failed to send invite | %s", exc)
+        logger.error("Failed to send invite: %s", exc)
         raise HTTPException(502, f"Email delivery failed: {exc}") from exc
 
-    logger.info("Invite sent | to=%s", body.email)
+    logger.info("Invite sent | to=%s | role=%s", body.email, role)
     return {"ok": True}
 
 

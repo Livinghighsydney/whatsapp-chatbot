@@ -7,4 +7,5 @@ python-multipart
 httpx
 psycopg2-binary
 python-jose[cryptography]
-passlib[bcrypt]
+bcrypt
+tzdata

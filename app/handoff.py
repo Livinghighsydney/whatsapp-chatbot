@@ -1,269 +1,231 @@
-"""Human handoff orchestration.
+"""Human handoff orchestration — Dashboard and WhatsApp modes.
 
-Flow:
-  1. Bot detects it cannot answer → begin_collection() transitions tenant to
-     collecting_info and asks for name / property / room.
-  2. Tenant replies → complete_collection() stores identity, assigns a session
-     ID (T1, T2…), and fires the handoff.
-  3. Staff receives a template alert via the Living High chat, then on first
-     reply gets a full brief: conversation history + tenant's direct number.
-  4. Staff opens a direct WhatsApp to the tenant's number — that becomes a
-     dedicated, isolated chat tile per tenant on the staff member's phone.
-  5. Any further tenant messages are forwarded to staff as notifications so
-     they're not missed while the direct chat is being set up.
-  6. Staff types "DONE T1" (or bare "DONE" if only one active handoff) in the
-     Living High chat to hand control back to the bot.
+Dashboard mode: assigns conversation to on-shift agent in DB; staff reply via dashboard UI.
+WhatsApp mode:  texts the on-shift agent's personal WhatsApp number; staff reply directly.
 """
 from __future__ import annotations
 
-import os
 import logging
-from datetime import datetime, timezone
+import os
 
-from app import state
+from app import db
+from app import db_conversations as dbc
+from app import shifts
 from app.whatsapp import send_message, send_template
 
 logger = logging.getLogger(__name__)
 
 HANDOFF_TEMPLATE = "staff_handoff_alert"
-
-_INFO_PROMPT = (
-    "Before I connect you with a team member, could you share your "
-    "*name*, *property address*, and *room number*? 🙏"
-)
 _NO_STAFF_MSG = (
     "Sorry, I couldn't reach a team member right now. "
     "Please email us at support@livinghigh.com.au or try again later."
 )
 
 
-# ── Staff roster ───────────────────────────────────────────────────────────────
+# ── Mode ───────────────────────────────────────────────────────────────────────
 
-def get_staff_numbers() -> list[str]:
-    raw = os.environ.get("STAFF_NUMBERS", "")
-    return [n.strip().lstrip("+") for n in raw.split(",") if n.strip()]
+def get_mode() -> str:
+    return dbc.get_setting("handoff_mode", "dashboard") or "dashboard"
 
+
+# ── Staff detection (WhatsApp mode) ───────────────────────────────────────────
 
 def is_staff(phone: str) -> bool:
-    return phone in get_staff_numbers()
+    """True if the sender's number belongs to a staff member."""
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute(
+            "SELECT 1 FROM staff_users WHERE whatsapp_number = %s LIMIT 1", [phone]
+        )
+        if cur.fetchone():
+            return True
+    # Fallback: STAFF_NUMBERS env var (legacy)
+    raw = os.environ.get("STAFF_NUMBERS", "")
+    return phone in [n.strip().lstrip("+") for n in raw.split(",") if n.strip()]
 
 
-# ── Info collection (pre-handoff) ──────────────────────────────────────────────
+# ── Trigger ────────────────────────────────────────────────────────────────────
 
-def begin_collection(tenant_number: str, reason: str) -> None:
-    """Ask the tenant for identity details before escalating."""
-    conv = state.get(tenant_number)
+def trigger(phone: str, reason: str) -> None:
+    """
+    Mark conversation as handed_off, assign to the on-shift agent,
+    and notify either via dashboard (silent) or WhatsApp template.
+    """
+    target = shifts.routing_target()
 
-    # If we already have their info from a previous session, skip collection
-    if conv.tenant_info.name:
-        complete_collection(tenant_number, reason=reason, raw_reply=None)
+    if not target:
+        logger.warning("Handoff triggered but no shifts configured | phone=%s", phone)
+        send_message(to=phone, body=_NO_STAFF_MSG)
         return
 
-    conv.status = "collecting_info"
-    conv.handoff_reason = reason
-    send_message(to=tenant_number, body=_INFO_PROMPT)
-    state.add_message(tenant_number, "assistant", _INFO_PROMPT)
-    logger.info("Info collection started | tenant=%s", tenant_number)
-
-
-def complete_collection(tenant_number: str, raw_reply: str | None, reason: str | None = None) -> None:
-    """Store tenant identity from their reply, then fire the handoff."""
-    conv = state.get(tenant_number)
-
-    if raw_reply is not None:
-        _parse_tenant_info(conv, raw_reply)
-
-    if reason:
-        conv.handoff_reason = reason
-
-    logger.info(
-        "Tenant info collected | tenant=%s | name=%s | property=%s | room=%s",
-        tenant_number, conv.tenant_info.name,
-        conv.tenant_info.property_address, conv.tenant_info.room,
+    session_id = dbc.new_session_id()
+    dbc.update(
+        phone,
+        status="handed_off",
+        session_id=session_id,
+        handoff_reason=reason,
+        assigned_staff_id=target["staff_user_id"],
     )
-    _trigger(tenant_number)
+    conv = dbc.get_or_create(phone)
+    display = conv.get("tenant_name") or f"+{phone}"
+    mode = get_mode()
 
-
-def _parse_tenant_info(conv: state.Conversation, raw: str) -> None:
-    """
-    Best-effort parse of "Name, Property, Room".
-    Structured extraction via Google Sheets lookup lands in Phase 3 —
-    for now we split on commas and fall back to storing the raw string.
-    """
-    parts = [p.strip() for p in raw.split(",")]
-    if len(parts) >= 3:
-        conv.tenant_info.name = parts[0]
-        conv.tenant_info.property_address = parts[1]
-        conv.tenant_info.room = ", ".join(parts[2:])  # handles "Room 3, Level 2" etc.
-    elif len(parts) == 2:
-        conv.tenant_info.name = parts[0]
-        conv.tenant_info.property_address = parts[1]
+    if mode == "whatsapp":
+        wa = target.get("whatsapp_number")
+        if not wa:
+            logger.warning("WhatsApp mode: %s has no whatsapp_number", target["email"])
+            send_message(to=phone, body=_NO_STAFF_MSG)
+            return
+        try:
+            send_template(
+                to=wa,
+                template_name=HANDOFF_TEMPLATE,
+                variables=[display, reason],
+            )
+        except Exception:
+            logger.exception("Failed to send handoff template to %s", wa)
+        send_message(
+            to=phone,
+            body="Our team has been notified and will reach out to you directly on WhatsApp shortly. 🙏",
+        )
     else:
-        conv.tenant_info.name = raw  # single-word reply; use as name
-
-
-# ── Handoff trigger ────────────────────────────────────────────────────────────
-
-def _trigger(tenant_number: str) -> None:
-    """Flip conversation to handed_off, notify staff, confirm to tenant."""
-    staff_numbers = get_staff_numbers()
-    if not staff_numbers:
-        logger.warning("Handoff triggered but STAFF_NUMBERS not configured")
-        send_message(to=tenant_number, body=_NO_STAFF_MSG)
-        return
-
-    conv = state.get(tenant_number)
-    conv.status = "handed_off"
-    conv.assigned_staff = list(staff_numbers)
-    conv.handed_off_at = datetime.now(timezone.utc)
-    conv.session_id = state.new_session(tenant_number)
-
-    send_message(
-        to=tenant_number,
-        body="Our team has been notified and will reach out to you directly on WhatsApp shortly. 🙏",
-    )
-
-    # Template variable 1 = tenant display name, variable 2 = reason
-    display = conv.tenant_info.name or f"+{tenant_number}"
-    for staff_number in staff_numbers:
-        send_template(
-            to=staff_number,
-            template_name=HANDOFF_TEMPLATE,
-            variables=[display, conv.handoff_reason],
+        # Dashboard mode — tenant gets a holding message; agent sees it in the dashboard
+        send_message(
+            to=phone,
+            body="I've connected you with a team member who will be with you shortly. 🙏",
         )
 
     logger.info(
-        "Handoff triggered | tenant=%s | session=%s | staff=%s | reason=%s",
-        tenant_number, conv.session_id, staff_numbers, conv.handoff_reason,
+        "Handoff triggered | phone=%s | session=%s | mode=%s | assigned=%s",
+        phone, session_id, mode, target["email"],
     )
 
 
-# ── Staff message handling ─────────────────────────────────────────────────────
+# ── Dashboard-mode: staff replies via API ─────────────────────────────────────
 
-def handle_staff_message(staff_number: str, body: str) -> None:
-    """Route an incoming message from a staff member in the Living High chat."""
+def resolve(phone: str) -> None:
+    dbc.update(
+        phone,
+        status="bot_active",
+        session_id=None,
+        assigned_staff_id=None,
+        handoff_reason=None,
+    )
+    logger.info("Handoff resolved | phone=%s", phone)
+
+
+# ── WhatsApp-mode: staff reply via their own phone ────────────────────────────
+
+def handle_staff_whatsapp_message(staff_phone: str, body: str) -> None:
+    """Route an incoming WhatsApp message from a staff member."""
     stripped = body.strip()
-
     if stripped.upper().startswith("DONE"):
-        _handle_done(staff_number, stripped)
-        return
-
-    # Any other reply: open the brief for each unseen active handoff
-    _handle_first_reply(staff_number)
+        _handle_done(staff_phone, stripped)
+    else:
+        _send_active_briefs(staff_phone)
 
 
-def _handle_done(staff_number: str, body: str) -> None:
-    """
-    Resolve a handoff.
-      "DONE T1"  → closes session T1 specifically
-      "DONE"     → closes the only active handoff (errors if there are several)
-    """
+def _handle_done(staff_phone: str, body: str) -> None:
     parts = body.split(maxsplit=1)
     session_ref = parts[1].strip().upper() if len(parts) > 1 else None
 
     if session_ref:
-        tenant_number = state.find_tenant_by_session(session_ref)
-        if not tenant_number:
-            send_message(to=staff_number, body=f"Session '{session_ref}' not found.")
+        tenant_phone = dbc.find_by_session(session_ref)
+        if not tenant_phone:
+            send_message(to=staff_phone, body=f"Session '{session_ref}' not found.")
             return
     else:
-        active = state.find_active_handoffs_for_staff(staff_number)
+        active = _active_for_staff_wa(staff_phone)
         if not active:
-            send_message(to=staff_number, body="No active handoffs to close.")
+            send_message(to=staff_phone, body="No active handoffs to close.")
             return
         if len(active) > 1:
-            ids = "  ".join(conv.session_id for _, conv in active)
+            ids = "  ".join(r[1] for r in active if r[1])
             send_message(
-                to=staff_number,
-                body=f"Multiple active handoffs: {ids}\nSpecify which to close, e.g. *DONE T1*",
+                to=staff_phone,
+                body=f"Multiple active handoffs: {ids}\nSpecify which, e.g. *DONE T1*",
             )
             return
-        tenant_number = active[0][0]
+        tenant_phone = active[0][0]
 
-    _resolve(staff_number, tenant_number)
-
-
-def _handle_first_reply(staff_number: str) -> None:
-    """
-    When a staff member replies to the template, the 24-hour free-form window
-    opens. Use it immediately to send the full handoff brief for every active
-    handoff they haven't seen yet.
-    """
-    active = state.find_active_handoffs_for_staff(staff_number)
-
-    if not active:
-        send_message(to=staff_number, body="No active handoffs at the moment.")
-        return
-
-    for tenant_number, conv in active:
-        if staff_number not in conv.staff_history_sent:
-            conv.staff_history_sent.add(staff_number)
-            _send_handoff_brief(staff_number, tenant_number, conv)
-
-
-def _send_handoff_brief(
-    staff_number: str,
-    tenant_number: str,
-    conv: state.Conversation,
-) -> None:
-    """Send the full context package to a staff member for one handoff."""
-    info = conv.tenant_info
-    history_text = _format_history(conv.history)
-
-    lines = [f"📋 *{conv.session_id}*"]
-    if info.name:
-        lines.append(f"👤 {info.name}")
-    if info.property_address:
-        lines.append(f"📍 {info.property_address}")
-    if info.room:
-        lines.append(f"🚪 {info.room}")
-    lines.append(f"📞 Direct number: +{tenant_number}")
-    lines.append("")
-    lines.append("*Conversation history:*")
-    lines.append(history_text)
-    lines.append("")
-    lines.append(f"Message the tenant directly at +{tenant_number}")
-    lines.append(f"Type *DONE {conv.session_id}* when you're finished.")
-
-    send_message(to=staff_number, body="\n".join(lines))
-
-
-def _resolve(staff_number: str, tenant_number: str) -> None:
-    conv = state.get(tenant_number)
-    session_id = conv.session_id  # capture before resolve() clears it
-
-    send_message(to=staff_number, body=f"✅ Handoff {session_id} closed.")
+    resolve(tenant_phone)
+    conv = dbc.get_or_create(tenant_phone)
+    send_message(to=staff_phone, body=f"✅ Handoff {conv.get('session_id') or ''} closed.")
     send_message(
-        to=tenant_number,
+        to=tenant_phone,
         body="Our team has sorted that out for you. I'm back and happy to help with anything else! 😊",
     )
 
-    state.resolve(tenant_number)
-    logger.info("Handoff resolved | session=%s | tenant=%s | staff=%s", session_id, tenant_number, staff_number)
+
+def _active_for_staff_wa(staff_phone: str) -> list[tuple[str, str]]:
+    """Returns list of (tenant_phone, session_id) for active handoffs for this WA number."""
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute(
+            """
+            SELECT c.tenant_phone, c.session_id
+            FROM conversations c
+            JOIN staff_users u ON u.id = c.assigned_staff_id
+            WHERE u.whatsapp_number = %s AND c.status = 'handed_off'
+            """,
+            [staff_phone],
+        )
+        return [(r[0], r[1]) for r in cur.fetchall()]
 
 
-# ── Tenant messages during active handoff ──────────────────────────────────────
+def _send_active_briefs(staff_phone: str) -> None:
+    """On first staff reply to the template, send full brief for each active handoff."""
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute(
+            """
+            SELECT c.tenant_phone, c.tenant_name, c.property_address,
+                   c.room, c.session_id, c.handoff_reason
+            FROM conversations c
+            JOIN staff_users u ON u.id = c.assigned_staff_id
+            WHERE u.whatsapp_number = %s AND c.status = 'handed_off'
+            """,
+            [staff_phone],
+        )
+        rows = cur.fetchall()
 
-def forward_to_staff(tenant_number: str, body: str) -> None:
-    """
-    Notify staff of a new tenant message during handoff.
-    Staff replies directly to the tenant's number — this is informational only.
-    """
-    conv = state.get(tenant_number)
-    if not conv.assigned_staff:
-        logger.warning("Handoff active for %s but no assigned_staff", tenant_number)
+    if not rows:
+        send_message(to=staff_phone, body="No active handoffs at the moment.")
         return
 
-    label = conv.tenant_info.name or f"+{tenant_number}"
-    notification = f"[{conv.session_id} | {label}]\n{body}"
+    for phone, name, prop, room, sid, reason in rows:
+        history = dbc.get_history(phone, limit=20)
+        lines = [f"📋 *{sid}*"]
+        if name:
+            lines.append(f"👤 {name}")
+        if prop:
+            lines.append(f"📍 {prop}")
+        if room:
+            lines.append(f"🚪 {room}")
+        lines.append(f"📞 Direct: +{phone}")
+        if reason:
+            lines.append(f"❓ Reason: {reason}")
+        lines += ["", "*Conversation:*"]
+        for m in history:
+            label = "Tenant" if m["role"] == "user" else "Bot"
+            lines.append(f"*{label}:* {m['content']}")
+        lines += ["", f"Type *DONE {sid}* when resolved."]
+        send_message(to=staff_phone, body="\n".join(lines))
 
-    for staff_number in conv.assigned_staff:
-        send_message(to=staff_number, body=notification)
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _format_history(history: list[dict]) -> str:
-    labels = {"user": "Tenant", "assistant": "Bot", "staff": "Staff"}
-    lines = [f"*{labels.get(m['role'], m['role'])}:* {m['content']}" for m in history]
-    return "\n".join(lines) if lines else "(no previous messages)"
+def forward_to_staff(phone: str, body: str) -> None:
+    """Notify assigned staff of a new tenant message during active handoff (WhatsApp mode)."""
+    conv = dbc.get_or_create(phone)
+    if not conv.get("assigned_staff_id"):
+        return
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute(
+            "SELECT whatsapp_number FROM staff_users WHERE id = %s",
+            [conv["assigned_staff_id"]],
+        )
+        row = cur.fetchone()
+    if not row or not row[0]:
+        return
+    label = conv.get("tenant_name") or f"+{phone}"
+    send_message(to=row[0], body=f"[{conv.get('session_id')} | {label}]\n{body}")
