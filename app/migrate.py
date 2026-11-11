@@ -1,4 +1,4 @@
-"""Run once at startup — creates tables if they don't already exist."""
+"""Run once at startup — creates tables and applies additive column migrations."""
 from __future__ import annotations
 
 import logging
@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS messages (
     content          TEXT NOT NULL,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Additive column migrations (safe to re-run)
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ;
 """
 
 

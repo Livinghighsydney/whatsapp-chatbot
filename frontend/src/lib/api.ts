@@ -15,6 +15,7 @@ export interface ChatSummary {
   last_ts?: string | null;
   assigned_to?: string | null;
   assigned_to_name?: string | null;
+  unread_count?: number | null;
 }
 
 export interface Message {

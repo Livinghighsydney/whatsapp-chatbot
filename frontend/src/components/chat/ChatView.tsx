@@ -33,7 +33,12 @@ export function ChatView({ phone, onBack, isAdmin, members }: { phone: string; o
   const [preview, setPreview] = useState<string | null>(null); const [confirmDel, setConfirmDel] = useState(false);
   const endRef = useRef<HTMLDivElement>(null); const fileRef = useRef<HTMLInputElement>(null); const taRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { setText(""); setFile(null); }, [phone]);
+  // When opening a chat, mark it read on the server (GET fires automatically via useQuery)
+  // and refresh the list so the unread badge disappears immediately
+  useEffect(() => {
+    setText(""); setFile(null);
+    qc.invalidateQueries({ queryKey: ["chats"] });
+  }, [phone]);
   useEffect(() => {
     if (!file || !/^(image|video)\//.test(file.type)) { setPreview(null); return; }
     const u = URL.createObjectURL(file); setPreview(u); return () => URL.revokeObjectURL(u);

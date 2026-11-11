@@ -202,6 +202,7 @@ def list_chats(payload: dict = Depends(_require_auth)):
 
 @router.get("/chats/{phone}")
 def get_chat(phone: str, _: dict = Depends(_require_auth)):
+    dbc.mark_read(phone)
     conv = dbc.get_detail(phone)
     if not conv:
         # Return empty shell so the frontend doesn't crash on a first visit
@@ -224,6 +225,8 @@ def send_text(phone: str, body: _TextBody, _: dict = Depends(_require_auth)):
         raise HTTPException(400, "Message cannot be empty")
     send_message(to=phone, body=body.message)
     dbc.add_message(phone, "staff", body.message)
+    dbc.mark_read(phone)
+    sse_mod.push("refresh")
     logger.info("Dashboard reply | to=%s", phone)
     return {"ok": True}
 

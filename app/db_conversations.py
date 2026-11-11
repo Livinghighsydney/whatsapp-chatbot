@@ -105,7 +105,12 @@ def list_for_dashboard(staff_id: str | None = None) -> list[dict]:
                  ORDER BY m.created_at DESC LIMIT 1) AS last_role,
                 (SELECT m.created_at::text FROM messages m
                  WHERE m.conversation_id = c.id
-                 ORDER BY m.created_at DESC LIMIT 1) AS last_ts
+                 ORDER BY m.created_at DESC LIMIT 1) AS last_ts,
+                (SELECT COUNT(*) FROM messages m
+                 WHERE m.conversation_id = c.id
+                 AND m.role = 'user'
+                 AND (c.last_read_at IS NULL OR m.created_at > c.last_read_at)
+                ) AS unread_count
             FROM conversations c
             LEFT JOIN staff_users u ON u.id = c.assigned_staff_id
         """
@@ -118,7 +123,7 @@ def list_for_dashboard(staff_id: str | None = None) -> list[dict]:
         cols = [
             "id", "phone", "name", "property", "room", "status", "session_id",
             "updated_at", "assigned_to", "assigned_to_name",
-            "last_message", "last_role", "last_ts",
+            "last_message", "last_role", "last_ts", "unread_count",
         ]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -195,4 +200,14 @@ def set_setting(key: str, value: str) -> None:
             "INSERT INTO settings (key, value) VALUES (%s, %s) "
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             [key, value],
+        )
+
+
+def mark_read(phone: str) -> None:
+    """Stamp last_read_at = NOW() so unread_count resets to 0 for this conversation."""
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute(
+            "UPDATE conversations SET last_read_at = NOW() WHERE tenant_phone = %s",
+            [phone],
         )
