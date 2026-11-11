@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, LogOut, Loader2, MessagesSquare, Users, Settings } from "lucide-react";
-import { listChats, sortChats, displayName, initials, formatListTime, openEventSource, type Member, type ChatSummary } from "@/lib/api";
+import { listChats, sortChats, displayName, initials, avatarColor, formatListTime, openEventSource, type Member, type ChatSummary } from "@/lib/api";
 import { playNotification, requestNotificationPermission, showDesktopNotification } from "@/lib/notify";
 import { StatusBadge } from "./StatusBadge";
 
@@ -83,10 +83,14 @@ function ChatRow({ c, selected, onSelect, isAdmin, who }: {
       }`}
     >
       {/* Avatar */}
-      <div className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
-        unread ? "bg-primary text-primary-foreground" : "bg-primary/15 text-primary"
-      }`}>
+      <div
+        className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white"
+        style={{ backgroundColor: avatarColor(c.phone) }}
+      >
         {initials(c)}
+        {unread && (
+          <span className="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-card bg-primary" />
+        )}
       </div>
 
       <div className="min-w-0 flex-1">
@@ -100,11 +104,9 @@ function ChatRow({ c, selected, onSelect, isAdmin, who }: {
           </span>
         </div>
 
-        {/* Property + status row */}
+        {/* Phone + status row */}
         <div className="flex items-center gap-2">
-          <span className="truncate text-xs text-muted-foreground">
-            {[c.room, c.property].filter(Boolean).join(", ") || "—"}
-          </span>
+          <span className="shrink-0 text-xs text-muted-foreground">+{c.phone}</span>
           <StatusBadge status={c.status} />
           {isAdmin && (
             <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
@@ -112,6 +114,13 @@ function ChatRow({ c, selected, onSelect, isAdmin, who }: {
             }`}>{who(c.assigned_to)}</span>
           )}
         </div>
+
+        {/* Property/room row */}
+        {(c.room || c.property) && (
+          <div className="text-xs text-muted-foreground truncate">
+            {[c.room, c.property].filter(Boolean).join(", ")}
+          </div>
+        )}
 
         {/* Preview + unread badge row */}
         <div className="mt-0.5 flex items-center justify-between gap-2">

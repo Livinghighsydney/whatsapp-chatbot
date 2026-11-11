@@ -266,6 +266,30 @@ export const initials = (c: Pick<ChatSummary, "name" | "phone">) =>
     ? c.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()
     : c.phone.slice(-4);
 
+// 12 distinct colours — same phone always gets the same colour
+const _AVATAR_COLORS = [
+  "#E53E3E", // red
+  "#DD6B20", // orange
+  "#D69E2E", // amber
+  "#38A169", // green
+  "#2F855A", // emerald
+  "#319795", // teal
+  "#3182CE", // blue
+  "#2B6CB0", // blue-dark
+  "#6B46C1", // purple
+  "#B83280", // pink
+  "#97266D", // fuchsia
+  "#2C7A7B", // cyan
+];
+
+export function avatarColor(phone: string): string {
+  let hash = 0;
+  for (let i = 0; i < phone.length; i++) {
+    hash = (hash * 31 + phone.charCodeAt(i)) >>> 0;
+  }
+  return _AVATAR_COLORS[hash % _AVATAR_COLORS.length];
+}
+
 export function formatListTime(ts?: string | null) {
   if (!ts) return "";
   const d = new Date(ts);

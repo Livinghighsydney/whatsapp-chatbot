@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MoreVertical, Paperclip, SendHorizontal, X, Loader2, FileText, CheckCircle2, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
-import { getChat, sendMessage, sendMedia, resolveChat, deleteChat, assignChat, mediaUrl, openEventSource, type Member, displayName, initials, formatMsgTime, type ChatDetail, type Message } from "@/lib/api";
+import { getChat, sendMessage, sendMedia, resolveChat, deleteChat, assignChat, mediaUrl, openEventSource, type Member, displayName, initials, avatarColor, formatMsgTime, type ChatDetail, type Message } from "@/lib/api";
 import { StatusBadge } from "./StatusBadge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -98,7 +98,10 @@ export function ChatView({ phone, onBack, isAdmin, members }: { phone: string; o
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-2 bg-brand px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] text-brand-foreground md:px-4">
         <button onClick={onBack} aria-label="Back" className="rounded-full p-2 hover:bg-brand-foreground/10 md:hidden"><ArrowLeft className="h-5 w-5" /></button>
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-foreground/20 text-sm font-bold">{c ? initials(c) : ""}</div>
+        <div
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white"
+          style={{ backgroundColor: avatarColor(phone) }}
+        >{c ? initials(c) : ""}</div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2"><span className="truncate font-bold">{c ? displayName(c) : `+${phone}`}</span>{c?.status && <span className="rounded-full bg-card"><StatusBadge status={c.status} /></span>}</div>
           <div className="truncate text-xs opacity-80">{[c?.room, c?.property].filter(Boolean).join(", ")}</div>

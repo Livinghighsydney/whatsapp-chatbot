@@ -220,9 +220,19 @@ class _TextBody(BaseModel):
 
 
 @router.post("/chats/{phone}/send")
-def send_text(phone: str, body: _TextBody, _: dict = Depends(_require_auth)):
+def send_text(phone: str, body: _TextBody, payload: dict = Depends(_require_auth)):
     if not body.message.strip():
         raise HTTPException(400, "Message cannot be empty")
+    conv = dbc.get_or_create(phone)
+    # Staff intervening mid-conversation — take over immediately, bot stays silent
+    if conv["status"] not in ("handed_off",):
+        staff_id = auth.get_user_id(payload["sub"])
+        dbc.update(
+            phone,
+            status="handed_off",
+            assigned_staff_id=staff_id,
+            handoff_reason="Staff intervened directly from dashboard",
+        )
     send_message(to=phone, body=body.message)
     dbc.add_message(phone, "staff", body.message)
     dbc.mark_read(phone)
