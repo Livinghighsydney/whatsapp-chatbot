@@ -1,4 +1,4 @@
-# Living High — WhatsApp Chatbot
+# Living High — WhatsApp Chatbot + Staff Dashboard
 
 ## What this is
 
@@ -6,7 +6,7 @@ A standalone WhatsApp chatbot for **Living High** tenants (Sydney co-living oper
 
 Tenant-facing only — tenants send WhatsApp messages to the AU business number and the bot replies using Claude AI. This is a **separate service** from the Living High internal Knowledge Base (KB).
 
-This repo lives at `D:\Living High Chatbot` and is deployed as its own Railway service.
+This repo lives at `D:\Living High Chatbot` and is deployed as two Railway services (backend + frontend dashboard).
 
 GitHub: https://github.com/Livinghighsydney/whatsapp-chatbot
 
@@ -30,18 +30,25 @@ The chatbot does **not** share code or a database with the KB. It will query the
 
 **What is working:**
 - Bot deployed on Railway: `https://web-production-9e95d.up.railway.app`
+- Staff dashboard deployed on Railway: `https://staff-dashboard-production-9c44bf78.up.railway.app`
 - Real AU WhatsApp number: **+61 450 879 134** (physical prepaid SIM)
 - End-to-end flow: tenant messages → webhook → Claude → reply via WhatsApp ✅
 - Meta app **published** (Live mode) ✅ — any tenant can now message the bot
 - App Review approved ✅
 - Tech Provider / Access Verification submitted ✅
 - 60-day access token set in Railway ✅ (expires ~January 2027)
+- Staff dashboard with JWT auth, full conversation history ✅
+- Dual handoff system (Dashboard mode + WhatsApp mode) ✅
+- Proactive tenant identity collection (name, property, room) ✅
+- Shift-based routing (AEST timezone, overlap rule, 7-day fallback) ✅
+- Real-time dashboard updates via SSE ✅
+- Unread message count badges ✅
+- Notification sound + desktop notifications ✅
+- Auto-handoff when staff intervenes from dashboard ✅
 
 **What is NOT yet built:**
 - Phase 2: RAG against KB property handbooks
-- Phase 3: Tenant identity via Google Sheets
-- Phase 4: Human handoff dashboard
-- Webhook signature verification (security hardening)
+- Phase 5: Webhook signature verification (security hardening)
 
 ---
 
@@ -49,11 +56,17 @@ The chatbot does **not** share code or a database with the KB. It will query the
 
 | Layer | Choice |
 |---|---|
-| Framework | FastAPI |
+| Bot framework | FastAPI |
 | WhatsApp API | Meta WhatsApp Cloud API (direct, NOT Twilio) |
-| AI | Claude API (Anthropic) — model: `claude-haiku-4-5-20251001` |
-| KB data access | HTTP calls to KB REST API (Phase 2, not yet built) |
-| Deployment | Railway (Hobby plan, always-on) |
+| AI | Claude Haiku (`claude-haiku-4-5-20251001`) |
+| Database | Neon PostgreSQL (psycopg2-binary, connection pool) |
+| Auth | JWT HS256 (python-jose), bcrypt |
+| Email | Resend.io (staff invite emails) |
+| Real-time | Server-Sent Events (SSE) |
+| Dashboard frontend | TanStack Start (SSR), React, TanStack Query, shadcn/ui, Tailwind |
+| Frontend deployment | Railway (Docker, node:24-alpine) |
+| Backend deployment | Railway (Hobby plan, always-on) |
+| Timezone | `zoneinfo.ZoneInfo("Australia/Sydney")` + `tzdata` package |
 
 **Note:** Twilio was abandoned early due to AU number provisioning restrictions. All WhatsApp is now via Meta Cloud API directly.
 
@@ -90,21 +103,64 @@ curl "https://graph.facebook.com/v25.0/oauth/access_token?grant_type=fb_exchange
 ```
 D:\Living High Chatbot\
 ├── app/
-│   ├── main.py        # FastAPI entry point, loads .env, registers router, root + health routes
-│   ├── webhook.py     # GET /webhook/whatsapp (Meta verification) + POST (incoming messages)
-│   ├── whatsapp.py    # Sends replies via Meta Graph API v19.0
-│   └── ai.py          # Claude API call with system prompt
+│   ├── main.py              # FastAPI entry, lifespan runs DB migrations, CORS, routers
+│   ├── webhook.py           # GET/POST /webhook/whatsapp — message processing + SSE push
+│   ├── whatsapp.py          # Send messages/templates/media via Meta Graph API v19.0
+│   ├── ai.py                # Claude API — get_reply() with tenant context, is_handoff()
+│   ├── structured.py        # Claude tool_use — extract_tenant_info() from free text
+│   ├── handoff.py           # Dual-mode handoff orchestration (dashboard + WhatsApp)
+│   ├── shifts.py            # Shift CRUD + AEST routing_target() with overlap rule
+│   ├── db.py                # Neon connection pool (psycopg2 SimpleConnectionPool)
+│   ├── db_conversations.py  # All conversation/message DB helpers, unread counts, mark_read
+│   ├── migrate.py           # Idempotent startup migrations (CREATE IF NOT EXISTS + ALTER)
+│   ├── auth.py              # JWT create/decode, bcrypt, user CRUD
+│   ├── staff_api.py         # All /staff/* endpoints — auth, users, shifts, chats, SSE
+│   ├── sse.py               # SSE pub/sub (asyncio.Queue per client, push/stream)
+│   ├── email.py             # Resend.io invite email helper
+│   └── state.py             # Legacy in-memory state (superseded by db_conversations.py)
+├── frontend/
+│   ├── Dockerfile           # Multi-stage Docker build (node:24-alpine), serves Nitro output
+│   ├── railway.toml         # builder = "dockerfile"
+│   ├── src/
+│   │   ├── components/chat/
+│   │   │   ├── Dashboard.tsx   # Root: auth check, members query, layout
+│   │   │   ├── Login.tsx       # Sign in / sign up / invite flow (reads role from URL)
+│   │   │   ├── ChatList.tsx    # Left sidebar with unread badges, colour avatars, SSE
+│   │   │   ├── ChatView.tsx    # Open conversation — messages, send, resolve, assign
+│   │   │   ├── Settings.tsx    # Modal: handoff toggle, Team tab, Shifts tab
+│   │   │   └── StatusBadge.tsx # Coloured pill for bot_active / handed_off / etc.
+│   │   └── lib/
+│   │       ├── api.ts          # All API calls + types (ChatSummary, Member, Shift, etc.)
+│   │       └── notify.ts       # Web Audio ping + desktop notification helpers
 ├── requirements.txt
-├── Procfile           # web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-├── .env               # local env vars (never commit)
-└── CLAUDE.md          # this file
+├── Procfile                 # web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+├── .env                     # local env vars (never commit)
+└── CLAUDE.md                # this file
 ```
+
+---
+
+## Database schema (Neon PostgreSQL)
+
+Five tables — migrations run automatically on every startup via `app/migrate.py`:
+
+```sql
+staff_users     — id, email, name, password_hash, role, whatsapp_number, created_at
+settings        — key (PK), value  [handoff_mode, session_counter]
+shifts          — id, staff_user_id (FK), weekday (0=Mon), start_time, end_time
+conversations   — id, tenant_phone (UNIQUE), tenant_name, property_address, room,
+                  status, assigned_staff_id (FK), session_id, handoff_reason,
+                  info_collected, last_read_at, created_at, updated_at
+messages        — id, conversation_id (FK), role, content, created_at
+```
+
+**Conversation statuses:** `bot_active` | `collecting_info` | `handed_off` | `resolved`
 
 ---
 
 ## Environment variables
 
-### Required in Railway Variables (and local .env):
+### Required in Railway Variables (backend service):
 
 ```
 ANTHROPIC_API_KEY=          # from console.anthropic.com → API Keys
@@ -112,6 +168,15 @@ META_ACCESS_TOKEN=          # 60-day token (see token management above)
 META_PHONE_NUMBER_ID=1312713438600035
 META_WABA_ID=28190264097319654
 META_VERIFY_TOKEN=livinghigh2024
+DATABASE_URL=               # Neon PostgreSQL connection string
+JWT_SECRET=                 # random secret for signing JWT tokens
+RESEND_API_KEY=             # from resend.com
+DASHBOARD_URL=https://staff-dashboard-production-9c44bf78.up.railway.app
+```
+
+### Required in Railway Variables (frontend service):
+```
+VITE_API_BASE_URL=https://web-production-9e95d.up.railway.app
 ```
 
 ### In local .env only (never commit, never put in Railway):
@@ -119,9 +184,9 @@ META_VERIFY_TOKEN=livinghigh2024
 APP_SECRET=                 # Meta app secret — only needed to generate long-lived tokens
 ```
 
-### Human handoff:
+### Optional (WhatsApp mode fallback):
 ```
-STAFF_NUMBERS=923219905434  # comma-separated WhatsApp numbers (without +) for staff relay
+STAFF_NUMBERS=923219905434  # comma-separated WA numbers without + (legacy fallback)
 ```
 
 ### Not yet needed (Phase 2):
@@ -130,59 +195,85 @@ KB_API_BASE_URL=            # base URL of KB Railway backend
 KB_API_KEY=                 # internal API key for chatbot→KB calls
 ```
 
-### Legacy (Twilio — no longer used):
-```
-TWILIO_ACCOUNT_SID=
-TWILIO_AUTH_TOKEN=
-TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
-```
-
 ---
 
 ## How it works (current flow)
 
+### Tenant message flow
 1. Tenant sends WhatsApp message to +61 450 879 134
-2. Meta sends POST to `https://web-production-9e95d.up.railway.app/webhook/whatsapp`
-3. `webhook.py` extracts sender number + message body, queues background task
-4. `ai.py` calls Claude API with the message
-5. `whatsapp.py` sends Claude's reply back via Meta Graph API v19.0
+2. Meta sends POST to `/webhook/whatsapp` — returns 200 immediately, processes in background
+3. **First-ever message:** bot sends info prompt asking for name/property/room
+4. **Collecting info:** Claude `tool_use` extracts name/property/room, stores in DB
+5. **Bot active:** Claude replies with tenant identity injected into system prompt
+6. **Handoff detected** (or staff intervenes): conversation set to `handed_off`, assigned to on-shift agent
+7. **During handoff:** bot completely silent — only staff can reply
+8. **Resolve:** staff clicks Resolve → status back to `bot_active`, bot resumes
 
-Background tasks are used to return 200 to Meta immediately (avoids webhook timeout).
+### Handoff routing
+- Reads on-shift agent via `shifts.routing_target()` — AEST timezone, Monday=0
+- **Overlap rule:** if two shifts overlap, most recently started wins
+- **No one on shift:** falls back to whoever's shift starts soonest (up to 7 days ahead)
+- **Dashboard mode:** assigns in DB, staff sees it in dashboard, replies via UI → sent as bot's WA number
+- **WhatsApp mode:** sends template alert to agent's personal WA number; agent replies directly
+
+### Real-time updates (SSE)
+- Backend `app/sse.py` maintains an `asyncio.Queue` per connected dashboard tab
+- `sse.push("message")` — new tenant message → triggers notification sound in dashboard
+- `sse.push("refresh")` — bot reply / staff send → silent UI update
+- Frontend subscribes via `EventSource` on `/staff/events?token=...` (JWT via query param since EventSource doesn't support headers)
+- TanStack Query `invalidateQueries` on SSE event — no page reload, React re-renders in place
+
+### Staff dashboard
+- Login at `https://staff-dashboard-production-9c44bf78.up.railway.app`
+- Super admin: `zunair@livinghigh.com.au` / `12345678`
+- Roles: `admin` (full access) | `agent` (own assigned chats only)
+- Invite URL encodes role: `?invite=1&email=...&role=admin`
+- First user to sign up always becomes admin regardless of URL param
+
+---
+
+## Staff dashboard features
+
+### Chat list
+- Real-time via SSE — new chats/messages appear instantly without refresh
+- **Unread badges:** count of unread tenant messages, bold name + preview, green timestamp
+- **Colour avatars:** deterministic hash of phone number → one of 12 distinct colours (consistent per tenant)
+- Phone number shown on each row; property/room shown when available
+- Pull-to-refresh on mobile
+
+### Chat view
+- Full message history (tenant / bot / staff bubbles)
+- Staff can send text or media (images, video, audio, documents)
+- Assign conversation to any team member
+- Resolve handoff → bot resumes
+- Delete conversation (soft reset)
+
+### Settings modal (admin only)
+- **Handoff mode toggle:** Dashboard ↔ WhatsApp
+- **Team tab:** member list with roles + WA numbers; invite form (email, name, role, WA number)
+- **Shifts tab:** add/delete shifts per member per weekday (AEST times); overlap rule explained
 
 ---
 
 ## Build plan
 
 ### Phase 1 — Basic working bot ✅ COMPLETE
-- FastAPI app deployed on Railway
-- Meta WhatsApp Cloud API integrated
-- Claude API integrated
-- End-to-end: tenant messages → bot replies
-- Real AU number (+61 450 879 134) registered, app published to Live mode
+### Phase 2 — Staff dashboard ✅ COMPLETE (was Phase 4)
+- JWT auth, role-based access (admin/agent)
+- DB-backed conversations (Neon PostgreSQL)
+- Dual handoff: Dashboard mode + WhatsApp mode
+- Shift management with AEST routing
+- Proactive tenant identity collection via Claude structured output
+- Real-time SSE, unread counts, notification sounds
+- Colour avatars, phone/property in chat bar
 
-### Phase 2 — RAG against KB property handbooks
+### Phase 3 — RAG against KB property handbooks
 - Add `GET /internal/search?q=...&type=building` to KB backend (internal, behind API key)
 - Create `app/rag.py` — calls KB search API, retrieves top-N handbook chunks
 - Update `ai.py` — inject retrieved context into Claude system prompt
-- Scope answers to the tenant's specific property (requires Phase 3 first)
+- Scope answers to the tenant's specific property (uses name/property already in DB)
 
-### Phase 3 — Tenant identity via Google Sheets
-- Tenant list maintained in a Google Sheet: columns = phone number, name, property/suburb, room
-- On first message from an unknown number: ask for name, look up in sheet
-- Once identified: scope all answers to their property
-- Store session state (phone → identity mapping) in memory or Redis
-
-### Phase 4 — Human handoff dashboard
-- Custom internal web UI (React) where staff can see flagged conversations
-- Bot detects it can't answer → flags conversation as "needs human", pauses itself for that tenant
-- Staff see the conversation in the dashboard, reply from there
-- Reply is sent to the tenant's WhatsApp thread via the same +61 450 879 134 number
-- Staff mark conversation "resolved" → bot resumes for that tenant
-- Backend: extend FastAPI app with conversation storage (PostgreSQL on Railway)
-- Frontend: React dashboard, login protected, deployed separately
-- Real-time: WebSockets or polling
-
-### Phase 5 — Webhook signature verification
+### Phase 4 — Webhook signature verification
 - Verify `X-Hub-Signature-256` header on all incoming Meta webhooks
 - Prevents spoofed webhook requests
 
@@ -190,20 +281,28 @@ Background tasks are used to return 200 to Meta immediately (avoids webhook time
 
 ## Working conventions
 
-- Keep this service thin — relay between Meta, Claude, and the KB API
-- No direct DB access ever — all KB data comes through the KB's REST API
+- Keep backend thin — relay between Meta, Claude, and the KB API
+- No direct KB DB access — all KB data comes through the KB's REST API
 - Only `visibility=general` pages from the KB used in RAG — never expose staff/team/restricted content
-- Log every incoming message and outgoing reply (currently to Railway logs)
+- Log every incoming message and outgoing reply (Railway logs)
 - Background tasks for all Claude+Meta calls to avoid webhook timeouts
 - Never commit `.env` — all secrets in Railway Variables
+- Git commits go to Zunair (no co-author lines)
+- Monday=0 (ISO weekday convention throughout)
 
 ---
 
 ## Deployment
 
+### Backend (chatbot + API)
 **Railway service:** `web-production-9e95d.up.railway.app`
 **Start command (Procfile):** `web: uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 **Deploy:** Push to `master` branch on GitHub → Railway auto-deploys
+
+### Frontend (staff dashboard)
+**Railway service:** `staff-dashboard-production-9c44bf78.up.railway.app`
+**Build:** Docker (node:24-alpine), `frontend/Dockerfile`, `frontend/railway.toml`
+**Root directory in Railway:** `frontend`
 
 **After any Railway redeploy:** Re-subscribe WABA to app webhook if messages stop arriving:
 ```bash
@@ -218,11 +317,13 @@ curl -X POST "https://graph.facebook.com/v25.0/28190264097319654/subscribed_apps
 | Issue | Cause | Fix |
 |---|---|---|
 | Bot stops receiving messages after redeploy | WABA subscription drops | Re-run the subscribed_apps curl above |
-| Meta access token 401 | Token expired | Regenerate 60-day token (see token management section) |
+| Meta access token 401 | Token expired (~January 2027) | Regenerate 60-day token (see token management section) |
 | Anthropic 401 invalid x-api-key | Wrong key type or expired | Generate fresh key from console.anthropic.com → API Keys |
 | Webhook not receiving messages | WABA not subscribed to correct app | Re-run subscribed_apps curl |
 | Two WABAs confusion | Test WABA vs real WABA | Always use WABA `28190264097319654` for production |
-| Meta publish blocked — broken link | Root URL returned 404 | Fixed: added root route `/` to main.py returning 200 |
+| Frontend build fails on Railway | Node version / builder mismatch | Uses Docker (node:24-alpine) — check Dockerfile and railway.toml |
+| SSE disconnects | Normal browser behaviour | EventSource auto-reconnects; 15s polling acts as fallback |
+| Bot replies during handoff | Old behaviour (fixed) | webhook.py returns early when status=handed_off |
 
 ---
 
