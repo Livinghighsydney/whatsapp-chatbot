@@ -1,16 +1,19 @@
-import { useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, LogOut, Loader2, MessagesSquare, Users, Settings } from "lucide-react";
-import { listChats, sortChats, displayName, initials, formatListTime, type Member } from "@/lib/api";
+import { listChats, sortChats, displayName, initials, formatListTime, openEventSource, type Member } from "@/lib/api";
 import { StatusBadge } from "./StatusBadge";
 
 export function ChatList({ selected, onSelect, onLogout, isAdmin, members, onTeam, onSettings }: { selected: string | null; onSelect: (p: string) => void; onLogout: () => void; isAdmin: boolean; members: Member[]; onTeam: () => void; onSettings: () => void }) {
   const who = (id?: string | null) => { const m = members.find((x) => x.id === id); return m ? (m.full_name || m.email).split(" ")[0] : "Unassigned"; };
-  const q = useQuery({ queryKey: ["chats"], queryFn: listChats, refetchInterval: 4000 });
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["chats"], queryFn: listChats, refetchInterval: 15000 });
   const [term, setTerm] = useState("");
   const [pull, setPull] = useState(0);
   const startY = useRef<number | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
+
+  useEffect(() => openEventSource(() => qc.invalidateQueries({ queryKey: ["chats"] })), [qc]);
 
   const chats = useMemo(() => {
     const t = term.toLowerCase().trim();

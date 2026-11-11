@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MoreVertical, Paperclip, SendHorizontal, X, Loader2, FileText, CheckCircle2, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
-import { getChat, sendMessage, sendMedia, resolveChat, deleteChat, assignChat, mediaUrl, type Member, displayName, initials, formatMsgTime, type ChatDetail, type Message } from "@/lib/api";
+import { getChat, sendMessage, sendMedia, resolveChat, deleteChat, assignChat, mediaUrl, openEventSource, type Member, displayName, initials, formatMsgTime, type ChatDetail, type Message } from "@/lib/api";
 import { StatusBadge } from "./StatusBadge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -28,7 +28,7 @@ function Bubble({ m }: { m: Message }) {
 export function ChatView({ phone, onBack, isAdmin, members }: { phone: string; onBack: () => void; isAdmin: boolean; members: Member[] }) {
   const qc = useQueryClient();
   const key = ["chat", phone];
-  const q = useQuery({ queryKey: key, queryFn: () => getChat(phone), refetchInterval: 4000 });
+  const q = useQuery({ queryKey: key, queryFn: () => getChat(phone), refetchInterval: 15000 });
   const [text, setText] = useState(""); const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null); const [confirmDel, setConfirmDel] = useState(false);
   const endRef = useRef<HTMLDivElement>(null); const fileRef = useRef<HTMLInputElement>(null); const taRef = useRef<HTMLTextAreaElement>(null);
@@ -41,6 +41,7 @@ export function ChatView({ phone, onBack, isAdmin, members }: { phone: string; o
   const count = q.data?.history.length ?? 0;
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [count, phone]);
   useEffect(() => { const t = taRef.current; if (t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 104) + "px"; } }, [text]);
+  useEffect(() => openEventSource(() => qc.invalidateQueries({ queryKey: key })), [phone]);
 
   const send = useMutation({
     mutationFn: async ({ msg, f }: { msg: string; f: File | null }) => {

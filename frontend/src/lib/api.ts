@@ -224,6 +224,22 @@ export const deleteShift = async (id: string): Promise<void> => {
 };
 
 
+// ── SSE real-time feed ─────────────────────────────────────────────────────────
+
+export function openEventSource(onRefresh: () => void): () => void {
+  const token = getToken();
+  if (!token) return () => {};
+  const es = new EventSource(`${BASE}/staff/events?token=${encodeURIComponent(token)}`);
+  es.onmessage = (e) => {
+    if (e.data === "refresh") onRefresh();
+  };
+  es.onerror = () => {
+    // Browser will auto-reconnect; nothing to do
+  };
+  return () => es.close();
+}
+
+
 // ── Sorting / display helpers ──────────────────────────────────────────────────
 
 const ORDER: Partial<Record<Status, number>> = {

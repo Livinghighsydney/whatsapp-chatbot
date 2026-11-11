@@ -6,6 +6,7 @@ from fastapi.responses import PlainTextResponse
 from app.ai import get_reply, is_handoff
 from app.whatsapp import send_message, mark_read_and_typing
 from app import db_conversations as dbc
+from app import sse
 from app.handoff import trigger, is_staff, handle_staff_whatsapp_message, forward_to_staff, get_mode
 from app.structured import extract_tenant_info
 
@@ -30,6 +31,7 @@ async def process_message(from_: str, body: str, message_id: str) -> None:
 
         conv = dbc.get_or_create(from_)
         dbc.add_message(from_, "user", body)
+        sse.push()
 
         # Active handoff — tenant sent another message
         if conv["status"] == "handed_off":
@@ -77,6 +79,7 @@ async def process_message(from_: str, body: str, message_id: str) -> None:
         else:
             dbc.add_message(from_, "assistant", reply)
             send_message(to=from_, body=reply)
+            sse.push()
             logger.info("Replied | to=%s", from_)
 
     except Exception:

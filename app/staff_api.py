@@ -5,11 +5,14 @@ import os
 import logging
 import urllib.parse
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError
 from pydantic import BaseModel
 import httpx
+
+from app import sse as sse_mod
 
 from app import auth
 from app import db_conversations as dbc
@@ -28,6 +31,14 @@ _bearer = HTTPBearer()
 def _require_auth(creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> dict:
     try:
         return auth.decode_token(creds.credentials)
+    except JWTError:
+        raise HTTPException(401, "Invalid or expired token")
+
+
+def _require_auth_query(token: str = Query("")) -> dict:
+    """Auth via query param — used for EventSource which can't set headers."""
+    try:
+        return auth.decode_token(token)
     except JWTError:
         raise HTTPException(401, "Invalid or expired token")
 
@@ -163,6 +174,17 @@ def delete_shift(shift_id: str, _: dict = Depends(_require_admin)):
     if not shifts_mod.delete(shift_id):
         raise HTTPException(404, "Shift not found")
     return {"ok": True}
+
+
+# ── SSE real-time feed ─────────────────────────────────────────────────────────
+
+@router.get("/events")
+async def events(_: dict = Depends(_require_auth_query)):
+    return StreamingResponse(
+        sse_mod.stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Chat list ──────────────────────────────────────────────────────────────────
