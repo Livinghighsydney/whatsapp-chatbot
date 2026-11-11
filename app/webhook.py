@@ -31,16 +31,12 @@ async def process_message(from_: str, body: str, message_id: str) -> None:
 
         conv = dbc.get_or_create(from_)
         dbc.add_message(from_, "user", body)
-        sse.push()
+        sse.push("message")  # triggers notification sound in dashboard
 
-        # Active handoff — tenant sent another message
+        # Active handoff — bot is silent; staff handle it from here
         if conv["status"] == "handed_off":
             if get_mode() == "whatsapp":
                 forward_to_staff(from_, body)
-            send_message(
-                to=from_,
-                body="Our team has been notified and will be with you shortly. 🙏",
-            )
             return
 
         # Collecting tenant identity details
@@ -79,7 +75,7 @@ async def process_message(from_: str, body: str, message_id: str) -> None:
         else:
             dbc.add_message(from_, "assistant", reply)
             send_message(to=from_, body=reply)
-            sse.push()
+            sse.push("refresh")  # silent UI update, no sound
             logger.info("Replied | to=%s", from_)
 
     except Exception:

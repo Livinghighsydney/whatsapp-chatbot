@@ -226,16 +226,17 @@ export const deleteShift = async (id: string): Promise<void> => {
 
 // ── SSE real-time feed ─────────────────────────────────────────────────────────
 
-export function openEventSource(onRefresh: () => void): () => void {
+export function openEventSource(
+  onUpdate: (hasSound: boolean) => void,
+): () => void {
   const token = getToken();
   if (!token) return () => {};
   const es = new EventSource(`${BASE}/staff/events?token=${encodeURIComponent(token)}`);
   es.onmessage = (e) => {
-    if (e.data === "refresh") onRefresh();
+    if (e.data === "message") onUpdate(true);   // new tenant msg → sound
+    else if (e.data === "refresh") onUpdate(false); // bot reply → silent
   };
-  es.onerror = () => {
-    // Browser will auto-reconnect; nothing to do
-  };
+  es.onerror = () => {};
   return () => es.close();
 }
 

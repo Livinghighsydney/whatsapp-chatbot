@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, LogOut, Loader2, MessagesSquare, Users, Settings } from "lucide-react";
 import { listChats, sortChats, displayName, initials, formatListTime, openEventSource, type Member } from "@/lib/api";
+import { playNotification, requestNotificationPermission, showDesktopNotification } from "@/lib/notify";
 import { StatusBadge } from "./StatusBadge";
 
 export function ChatList({ selected, onSelect, onLogout, isAdmin, members, onTeam, onSettings }: { selected: string | null; onSelect: (p: string) => void; onLogout: () => void; isAdmin: boolean; members: Member[]; onTeam: () => void; onSettings: () => void }) {
@@ -13,7 +14,14 @@ export function ChatList({ selected, onSelect, onLogout, isAdmin, members, onTea
   const startY = useRef<number | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
-  useEffect(() => openEventSource(() => qc.invalidateQueries({ queryKey: ["chats"] })), [qc]);
+  useEffect(() => { requestNotificationPermission(); }, []);
+  useEffect(() => openEventSource((hasSound) => {
+    qc.invalidateQueries({ queryKey: ["chats"] });
+    if (hasSound) {
+      playNotification();
+      showDesktopNotification("Living High", "New message from a tenant");
+    }
+  }), [qc]);
 
   const chats = useMemo(() => {
     const t = term.toLowerCase().trim();

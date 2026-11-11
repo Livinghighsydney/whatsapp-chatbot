@@ -41,7 +41,7 @@ export function ChatView({ phone, onBack, isAdmin, members }: { phone: string; o
   const count = q.data?.history.length ?? 0;
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [count, phone]);
   useEffect(() => { const t = taRef.current; if (t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 104) + "px"; } }, [text]);
-  useEffect(() => openEventSource(() => qc.invalidateQueries({ queryKey: key })), [phone]);
+  useEffect(() => openEventSource((_s) => qc.invalidateQueries({ queryKey: key })), [phone]);
 
   const send = useMutation({
     mutationFn: async ({ msg, f }: { msg: string; f: File | null }) => {
