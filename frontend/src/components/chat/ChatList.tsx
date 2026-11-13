@@ -1,14 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search, LogOut, Loader2, MessagesSquare, Users, Settings } from "lucide-react";
+import { Search, LogOut, Loader2, MessagesSquare, Users, Settings, Bot } from "lucide-react";
 import { listChats, sortChats, displayName, initials, avatarColor, formatListTime, openEventSource, type Member, type ChatSummary } from "@/lib/api";
 import { playNotification, requestNotificationPermission, showDesktopNotification } from "@/lib/notify";
 import { StatusBadge } from "./StatusBadge";
 
-export function ChatList({ selected, onSelect, onLogout, isAdmin, members, onTeam, onSettings }: { selected: string | null; onSelect: (p: string) => void; onLogout: () => void; isAdmin: boolean; members: Member[]; onTeam: () => void; onSettings: () => void }) {
-  const who = (id?: string | null) => { const m = members.find((x) => x.id === id); return m ? (m.full_name || m.email).split(" ")[0] : "Unassigned"; };
+type Tab = "queue" | "bot";
+
+export function ChatList({ selected, onSelect, onLogout, isAdmin, members, onTeam, onSettings }: {
+  selected: string | null;
+  onSelect: (p: string) => void;
+  onLogout: () => void;
+  isAdmin: boolean;
+  members: Member[];
+  onTeam: () => void;
+  onSettings: () => void;
+}) {
+  const who = (id?: string | null) => {
+    const m = members.find((x) => x.id === id);
+    return m ? (m.full_name || m.email).split(" ")[0] : "Unassigned";
+  };
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["chats"], queryFn: listChats, refetchInterval: 15000 });
+  const [tab, setTab] = useState<Tab>("queue");
   const [term, setTerm] = useState("");
   const [pull, setPull] = useState(0);
   const startY = useRef<number | null>(null);
@@ -23,14 +37,29 @@ export function ChatList({ selected, onSelect, onLogout, isAdmin, members, onTea
     }
   }), [qc]);
 
-  const chats = useMemo(() => {
+  const allChats = useMemo(() => sortChats(q.data ?? []), [q.data]);
+
+  // Queue tab: handed_off chats (staff action needed)
+  // Bot tab: everything the bot is currently handling
+  const queueChats = useMemo(() => allChats.filter((c) => c.status === "handed_off"), [allChats]);
+  const botChats = useMemo(() => allChats.filter((c) => c.status !== "handed_off"), [allChats]);
+
+  const queueUnread = useMemo(() => queueChats.reduce((n, c) => n + (c.unread_count ?? 0), 0), [queueChats]);
+  const botUnread = useMemo(() => botChats.reduce((n, c) => n + (c.unread_count ?? 0), 0), [botChats]);
+
+  const filtered = useMemo(() => {
     const t = term.toLowerCase().trim();
-    const list = sortChats(q.data ?? []);
+    const list = tab === "queue" ? queueChats : botChats;
     return t ? list.filter((c) => [c.name, c.phone, c.property, c.room].some((v) => v?.toLowerCase().includes(t))) : list;
-  }, [q.data, term]);
+  }, [tab, queueChats, botChats, term]);
+
+  const emptyMsg = tab === "queue"
+    ? (isAdmin ? "No active handoffs" : "No chats assigned to you")
+    : "No bot-handled chats";
 
   return (
     <div className="flex h-full flex-col bg-card">
+      {/* Header */}
       <header className="flex items-center justify-between bg-brand px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] text-brand-foreground">
         <h1 className="text-lg font-extrabold">Living High <span className="font-normal opacity-80">Staff</span></h1>
         <div className="flex items-center">
@@ -39,29 +68,80 @@ export function ChatList({ selected, onSelect, onLogout, isAdmin, members, onTea
           <button onClick={onLogout} aria-label="Sign out" className="rounded-full p-2 hover:bg-brand-foreground/10"><LogOut className="h-5 w-5" /></button>
         </div>
       </header>
+
+      {/* Tabs */}
+      <div className="flex border-b border-border">
+        <TabBtn active={tab === "queue"} onClick={() => setTab("queue")} badge={queueUnread}>
+          My Queue
+        </TabBtn>
+        <TabBtn active={tab === "bot"} onClick={() => setTab("bot")} badge={botUnread} icon={<Bot className="h-3.5 w-3.5" />}>
+          Bot Chats
+        </TabBtn>
+      </div>
+
+      {/* Search */}
       <div className="border-b border-border p-2">
         <div className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2">
           <Search className="h-4 w-4 text-muted-foreground" />
-          <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Search name, phone or property"
-            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
+          <input
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+            placeholder="Search name, phone or property"
+            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          />
         </div>
       </div>
-      <div ref={scroller} className="flex-1 overflow-y-auto overscroll-contain"
+
+      {/* List */}
+      <div
+        ref={scroller}
+        className="flex-1 overflow-y-auto overscroll-contain"
         onTouchStart={(e) => { if ((scroller.current?.scrollTop ?? 0) <= 0) startY.current = (e.touches[0]?.clientY ?? 0); }}
         onTouchMove={(e) => { if (startY.current != null) setPull(Math.max(0, Math.min(80, (e.touches[0]?.clientY ?? 0) - startY.current))); }}
-        onTouchEnd={() => { if (pull > 60) q.refetch(); setPull(0); startY.current = null; }}>
+        onTouchEnd={() => { if (pull > 60) q.refetch(); setPull(0); startY.current = null; }}
+      >
         <div style={{ height: pull }} className="flex items-center justify-center overflow-hidden transition-[height]">
           {pull > 0 && <Loader2 className={`h-5 w-5 text-primary ${pull > 60 ? "animate-spin" : ""}`} />}
         </div>
         {q.isLoading && <div className="flex justify-center p-8"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>}
-        {!q.isLoading && chats.length === 0 && (
+        {!q.isLoading && filtered.length === 0 && (
           <div className="flex flex-col items-center gap-2 p-10 text-center text-muted-foreground">
-            <MessagesSquare className="h-10 w-10" />{term ? "No matches" : isAdmin ? "No conversations yet" : "No chats assigned to you yet"}
+            <MessagesSquare className="h-10 w-10" />
+            <p className="text-sm">{term ? "No matches" : emptyMsg}</p>
           </div>
         )}
-        {chats.map((c) => <ChatRow key={c.phone} c={c} selected={selected === c.phone} onSelect={onSelect} isAdmin={isAdmin} who={who} />)}
+        {filtered.map((c) => (
+          <ChatRow key={c.phone} c={c} selected={selected === c.phone} onSelect={onSelect} isAdmin={isAdmin} who={who} />
+        ))}
       </div>
     </div>
+  );
+}
+
+function TabBtn({ active, onClick, badge, icon, children }: {
+  active: boolean;
+  onClick: () => void;
+  badge?: number;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm font-semibold transition-colors ${
+        active
+          ? "border-b-2 border-primary text-primary"
+          : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {icon}
+      {children}
+      {!!badge && badge > 0 && (
+        <span className="flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -94,7 +174,7 @@ function ChatRow({ c, selected, onSelect, isAdmin, who }: {
       </div>
 
       <div className="min-w-0 flex-1">
-        {/* Name + timestamp row */}
+        {/* Name + timestamp */}
         <div className="flex items-center justify-between gap-2">
           <span className={`truncate ${unread ? "font-extrabold text-foreground" : "font-bold"}`}>
             {displayName(c)}
@@ -104,7 +184,7 @@ function ChatRow({ c, selected, onSelect, isAdmin, who }: {
           </span>
         </div>
 
-        {/* Phone + status row */}
+        {/* Phone + status */}
         <div className="flex items-center gap-2">
           <span className="shrink-0 text-xs text-muted-foreground">+{c.phone}</span>
           <StatusBadge status={c.status} />
@@ -115,19 +195,18 @@ function ChatRow({ c, selected, onSelect, isAdmin, who }: {
           )}
         </div>
 
-        {/* Property/room row */}
+        {/* Property/room */}
         {(c.room || c.property) && (
-          <div className="text-xs text-muted-foreground truncate">
+          <div className="truncate text-xs text-muted-foreground">
             {[c.room, c.property].filter(Boolean).join(", ")}
           </div>
         )}
 
-        {/* Preview + unread badge row */}
+        {/* Preview + unread badge */}
         <div className="mt-0.5 flex items-center justify-between gap-2">
           <span className={`truncate text-sm ${unread ? "font-semibold text-foreground" : "text-muted-foreground"}`}>
             {c.last_message}
           </span>
-          {/* Unread count badge — same as WhatsApp */}
           {unread && (
             <span className="flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold leading-none text-primary-foreground">
               {count > 99 ? "99+" : count}
