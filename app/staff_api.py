@@ -275,19 +275,12 @@ def assign_chat(phone: str, body: dict, payload: dict = Depends(_require_auth)):
 
 @router.delete("/chats/{phone}")
 def delete_chat(phone: str, _: dict = Depends(_require_auth)):
-    # Soft delete: reset to bot_active with no history (delete messages)
-    conv = dbc.get_or_create(phone)
-    if conv.get("id"):
-        from app import db
-        with db.conn() as c:
-            cur = c.cursor()
-            cur.execute("DELETE FROM messages WHERE conversation_id = %s", [conv["id"]])
-        dbc.update(
-            phone,
-            status="bot_active", session_id=None, assigned_staff_id=None,
-            handoff_reason=None, info_collected=False,
-            tenant_name=None, property_address=None, room=None,
-        )
+    from app import db
+    with db.conn() as c:
+        cur = c.cursor()
+        # CASCADE deletes all messages automatically
+        cur.execute("DELETE FROM conversations WHERE tenant_phone = %s", [phone])
+    sse_mod.push("refresh")
     return {"ok": True}
 
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MoreVertical, Paperclip, SendHorizontal, X, Loader2, FileText, CheckCircle2, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
-import { getChat, sendMessage, sendMedia, resolveChat, deleteChat, assignChat, mediaUrl, openEventSource, type Member, displayName, initials, avatarColor, formatMsgTime, type ChatDetail, type Message } from "@/lib/api";
+import { getChat, sendMessage, sendMedia, resolveChat, deleteChat, assignChat, mediaUrl, openEventSource, type Member, type ChatSummary, displayName, initials, avatarColor, formatMsgTime, type ChatDetail, type Message } from "@/lib/api";
 import { StatusBadge } from "./StatusBadge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -86,7 +86,15 @@ export function ChatView({ phone, onBack, isAdmin, members }: { phone: string; o
   });
   const del = useMutation({
     mutationFn: () => deleteChat(phone),
-    onSuccess: () => { toast.success("✅ Chat deleted"); qc.removeQueries({ queryKey: key }); qc.invalidateQueries({ queryKey: ["chats"] }); onBack(); },
+    onSuccess: () => {
+      toast.success("✅ Chat deleted");
+      qc.removeQueries({ queryKey: key });
+      // Remove the card immediately from the list without waiting for refetch
+      qc.setQueryData(["chats"], (old: ChatSummary[] | undefined) =>
+        old?.filter((c) => c.phone !== phone) ?? []
+      );
+      onBack();
+    },
     onError: () => toast.error("❌ Couldn't delete chat"),
   });
 
