@@ -34,6 +34,7 @@ VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 VOYAGE_MODEL = "voyage-3-lite"
 VOYAGE_BATCH = 64        # texts per API call (safe well under 128 limit)
 MAX_CHUNK_CHARS = 1200   # hard cap per chunk before embedding
+VOYAGE_DIMS = 512        # voyage-3-lite output dimensions
 
 
 # ── HTML cleaning ──────────────────────────────────────────────────────────────

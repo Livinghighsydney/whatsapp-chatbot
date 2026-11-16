@@ -63,8 +63,10 @@ CREATE TABLE IF NOT EXISTS messages (
 -- Additive column migrations (safe to re-run)
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ;
 
--- RAG: KB content chunks with Voyage AI embeddings (1024 dims)
-CREATE TABLE IF NOT EXISTS chunks (
+-- RAG: KB content chunks with Voyage AI embeddings (512 dims — voyage-3-lite)
+-- Drop and recreate if dimension was wrong (safe — no data yet on first deploy)
+DROP TABLE IF EXISTS chunks CASCADE;
+CREATE TABLE chunks (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     kb_page_id       TEXT NOT NULL,
     kb_page_title    TEXT NOT NULL DEFAULT '',
@@ -76,13 +78,10 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_index      INTEGER NOT NULL DEFAULT 0,
     heading          TEXT,
     content          TEXT NOT NULL,
-    embedding        vector(1024),
+    embedding        vector(512),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-ALTER TABLE chunks ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'general';
-ALTER TABLE chunks ADD COLUMN IF NOT EXISTS room_number TEXT;
 
 CREATE INDEX IF NOT EXISTS chunks_kb_page_id_idx ON chunks(kb_page_id);
 CREATE INDEX IF NOT EXISTS chunks_property_id_idx ON chunks(property_id);
