@@ -294,6 +294,29 @@ async def trigger_sync(background_tasks: BackgroundTasks, _: dict = Depends(_req
     return {"ok": True, "message": "Bulk sync started in background — check Railway logs"}
 
 
+@router.get("/embeddings/status")
+def embeddings_status(_: dict = Depends(_require_admin)):
+    """Check chunk count + env var presence (no values exposed)."""
+    import os
+    from app import db
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute("SELECT COUNT(*), COUNT(DISTINCT kb_page_id) FROM chunks")
+        total, pages = cur.fetchone()
+        cur.execute("SELECT kb_page_type, COUNT(*) FROM chunks GROUP BY kb_page_type")
+        by_type = dict(cur.fetchall())
+    return {
+        "chunks": total,
+        "pages_indexed": pages,
+        "by_type": by_type,
+        "env": {
+            "KB_API_BASE_URL": bool(os.environ.get("KB_API_BASE_URL")),
+            "KB_API_KEY": bool(os.environ.get("KB_API_KEY")),
+            "VOYAGE_API_KEY": bool(os.environ.get("VOYAGE_API_KEY")),
+        },
+    }
+
+
 # ── Invite ─────────────────────────────────────────────────────────────────────
 
 class _InviteBody(BaseModel):
