@@ -1,6 +1,4 @@
-"""Neon PostgreSQL connection pool."""
 from __future__ import annotations
-
 import os
 import psycopg2
 from psycopg2 import pool
@@ -11,8 +9,7 @@ _pool: pool.SimpleConnectionPool | None = None
 def _get_pool() -> pool.SimpleConnectionPool:
     global _pool
     if _pool is None:
-        url = os.environ["DATABASE_URL"]
-        _pool = pool.SimpleConnectionPool(1, 10, url)
+        _pool = pool.SimpleConnectionPool(1, 10, os.environ["DATABASE_URL"])
     return _pool
 
 
@@ -25,7 +22,6 @@ def put_conn(conn) -> None:
 
 
 class _Conn:
-    """Context manager — borrows a connection from the pool and returns it."""
     def __enter__(self):
         self._conn = get_conn()
         return self._conn

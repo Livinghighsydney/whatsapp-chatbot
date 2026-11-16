@@ -1,7 +1,10 @@
+from __future__ import annotations
 import os
 from anthropic import AsyncAnthropic
 
-client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+_client: AsyncAnthropic | None = None
+
+HANDOFF_PREFIX = "HANDOFF_REQUIRED:"
 
 _BASE_SYSTEM = """\
 You are a WhatsApp assistant for Living High, a Sydney co-living operator.
@@ -27,16 +30,15 @@ Always output HANDOFF_REQUIRED for:
 - Anything about a specific room, unit, or tenancy
 - Complaints or urgent issues
 - Requests to "connect", "transfer", or "speak to someone"
-- Anything you are not fully certain about
-
-Examples:
-  "What's the WiFi password?" → HANDOFF_REQUIRED: Tenant requesting property WiFi credentials
-  "My heater is broken" → HANDOFF_REQUIRED: Maintenance request requires staff attention
-  "What's my rent?" → HANDOFF_REQUIRED: Billing query requires staff access
-  "Can I speak to someone?" → HANDOFF_REQUIRED: Tenant requesting human assistance\
+- Anything you are not fully certain about\
 """
 
-HANDOFF_PREFIX = "HANDOFF_REQUIRED:"
+
+def _client_() -> AsyncAnthropic:
+    global _client
+    if _client is None:
+        _client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return _client
 
 
 def _build_system(conv: dict | None) -> str:
@@ -62,8 +64,7 @@ async def get_reply(message: str, history: list[dict] | None = None, conv: dict 
             if entry["role"] in ("user", "assistant"):
                 messages.append({"role": entry["role"], "content": entry["content"]})
     messages.append({"role": "user", "content": message})
-
-    response = await client.messages.create(
+    response = await _client_().messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=500,
         system=_build_system(conv),
@@ -75,6 +76,5 @@ async def get_reply(message: str, history: list[dict] | None = None, conv: dict 
 def is_handoff(reply: str) -> tuple[bool, str]:
     stripped = reply.strip()
     if stripped.startswith(HANDOFF_PREFIX):
-        reason = stripped[len(HANDOFF_PREFIX):].strip()
-        return True, reason
+        return True, stripped[len(HANDOFF_PREFIX):].strip()
     return False, ""

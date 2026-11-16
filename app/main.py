@@ -1,33 +1,29 @@
 import logging
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 
-from app.webhook import router as webhook_router
-from app.staff_api import router as staff_router
 from app import migrate
+from app.routes.webhook import router as webhook_router
+from app.routes.staff import router as staff_router
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_: FastAPI):
     migrate.run()
     yield
 
 
 app = FastAPI(title="Living High Chatbot", lifespan=lifespan)
 
-# Allow the Lovable-hosted frontend (and local dev) to call the API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # restrict to Lovable domain once URL is known
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

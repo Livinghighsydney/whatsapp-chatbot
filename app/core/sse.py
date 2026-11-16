@@ -1,6 +1,4 @@
-"""Lightweight SSE pub/sub for real-time dashboard updates."""
 from __future__ import annotations
-
 import asyncio
 from typing import AsyncIterator
 
@@ -8,7 +6,6 @@ _clients: set[asyncio.Queue] = set()
 
 
 def push(event: str = "refresh") -> None:
-    """Call from any context (sync or async) to notify all connected dashboards."""
     for q in list(_clients):
         try:
             q.put_nowait(event)
@@ -17,7 +14,6 @@ def push(event: str = "refresh") -> None:
 
 
 async def stream() -> AsyncIterator[str]:
-    """Async generator — yields SSE-formatted strings until the client disconnects."""
     q: asyncio.Queue = asyncio.Queue(maxsize=20)
     _clients.add(q)
     try:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from app import db
+from app.core import db
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +64,7 @@ CREATE TABLE IF NOT EXISTS messages (
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ;
 
 -- RAG: KB content chunks with Voyage AI embeddings (512 dims — voyage-3-lite)
--- Drop and recreate if dimension was wrong (safe — no data yet on first deploy)
-DROP TABLE IF EXISTS chunks CASCADE;
-CREATE TABLE chunks (
+CREATE TABLE IF NOT EXISTS chunks (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     kb_page_id       TEXT NOT NULL,
     kb_page_title    TEXT NOT NULL DEFAULT '',
