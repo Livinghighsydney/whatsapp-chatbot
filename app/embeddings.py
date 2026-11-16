@@ -298,6 +298,8 @@ def fetch_pages() -> list[dict]:
 
 def sync_page(page: dict) -> int:
     """Chunk + embed + upsert a single page. Returns chunk count."""
+    import time
+
     chunks = chunk_page(page)
     if not chunks:
         logger.info("Page %s produced no chunks (empty content)", page["id"])
@@ -305,7 +307,9 @@ def sync_page(page: dict) -> int:
 
     texts = [c["content"] for c in chunks]
     embeddings: list[list[float]] = []
-    for batch in _batched(texts, VOYAGE_BATCH):
+    for i, batch in enumerate(_batched(texts, VOYAGE_BATCH)):
+        if i > 0:
+            time.sleep(0.5)  # 0.5s between batches within a page
         embeddings.extend(_embed_batch(batch))
 
     _upsert_chunks(chunks, embeddings)
@@ -314,19 +318,37 @@ def sync_page(page: dict) -> int:
 
 def sync_all() -> dict:
     """Bulk ingestion — fetch all KB pages, chunk and embed everything."""
+    import time
+
     pages = fetch_pages()
     total_chunks = 0
     skipped = 0
 
-    for page in pages:
+    for idx, page in enumerate(pages):
         try:
             n = sync_page(page)
             total_chunks += n
             if n == 0:
                 skipped += 1
-        except Exception:
-            logger.exception("Failed to sync page %s (%s)", page["id"], page.get("title"))
-            skipped += 1
+            else:
+                # Brief pause between pages to stay under rate limits
+                time.sleep(0.3)
+        except Exception as e:
+            if "rate" in str(e).lower() or "429" in str(e):
+                logger.warning("Rate limited on page %s — waiting 20s", page["id"])
+                time.sleep(20)
+                try:
+                    n = sync_page(page)
+                    total_chunks += n
+                except Exception:
+                    logger.exception("Retry failed for page %s", page["id"])
+                    skipped += 1
+            else:
+                logger.exception("Failed to sync page %s (%s)", page["id"], page.get("title"))
+                skipped += 1
+
+        if (idx + 1) % 20 == 0:
+            logger.info("Progress: %d/%d pages, %d chunks so far", idx + 1, len(pages), total_chunks)
 
     logger.info("Bulk sync complete: %d pages, %d chunks, %d skipped",
                 len(pages), total_chunks, skipped)
