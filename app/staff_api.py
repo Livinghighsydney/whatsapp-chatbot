@@ -5,7 +5,7 @@ import os
 import logging
 import urllib.parse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError
@@ -282,6 +282,16 @@ def delete_chat(phone: str, _: dict = Depends(_require_auth)):
         cur.execute("DELETE FROM conversations WHERE tenant_phone = %s", [phone])
     sse_mod.push("refresh")
     return {"ok": True}
+
+
+# ── RAG / Embeddings ───────────────────────────────────────────────────────────
+
+@router.post("/embeddings/sync")
+async def trigger_sync(background_tasks: BackgroundTasks, _: dict = Depends(_require_admin)):
+    """Kick off bulk KB ingestion in the background. Admin only."""
+    from app.embeddings import sync_all
+    background_tasks.add_task(sync_all)
+    return {"ok": True, "message": "Bulk sync started in background — check Railway logs"}
 
 
 # ── Invite ─────────────────────────────────────────────────────────────────────
