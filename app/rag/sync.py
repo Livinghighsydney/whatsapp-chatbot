@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import logging
 import os
 import time
@@ -31,12 +32,13 @@ def _upsert(chunks: list[dict], embeddings: list[list[float]]) -> None:
                 """
                 INSERT INTO chunks
                   (kb_page_id, kb_page_title, kb_page_type, visibility,
-                   property_id, room_number, chunk_index, heading, content, embedding)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::vector)
+                   property_id, room_number, chunk_index, heading, content, embedding, images)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::vector,%s)
                 """,
                 (chunk["kb_page_id"], chunk["kb_page_title"], chunk["kb_page_type"],
                  chunk["visibility"], chunk["property_id"], chunk["room_number"],
-                 chunk["chunk_index"], chunk["heading"], chunk["content"], vec),
+                 chunk["chunk_index"], chunk["heading"], chunk["content"], vec,
+                 json.dumps(chunk.get("images", []))),
             )
 
 

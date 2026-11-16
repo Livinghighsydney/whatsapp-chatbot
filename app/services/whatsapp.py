@@ -63,6 +63,14 @@ def send_media(to: str, media_id: str, media_type: str) -> None:
     })
 
 
+def send_image_url(to: str, url: str, caption: str = "") -> None:
+    payload: dict = {"messaging_product": "whatsapp", "to": _clean(to), "type": "image", "image": {"link": url}}
+    if caption:
+        payload["image"]["caption"] = caption
+    _post(payload)
+    logger.info("Sent image | to=%s | caption=%s", _clean(to), caption[:50])
+
+
 def mark_read_typing(message_id: str) -> None:
     _post({"messaging_product": "whatsapp", "status": "read", "message_id": message_id, "typing_indicator": {"type": "text"}})
 

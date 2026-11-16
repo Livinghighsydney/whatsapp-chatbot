@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS images JSONB DEFAULT '[]';
+
 CREATE INDEX IF NOT EXISTS chunks_kb_page_id_idx ON chunks(kb_page_id);
 CREATE INDEX IF NOT EXISTS chunks_property_id_idx ON chunks(property_id);
 CREATE INDEX IF NOT EXISTS chunks_room_number_idx ON chunks(room_number);

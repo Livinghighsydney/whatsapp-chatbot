@@ -1,6 +1,6 @@
 from __future__ import annotations
 import re
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 _ROOM_RE = re.compile(r"\bRoom\s+(\d+[A-Za-z]?)\b", re.IGNORECASE)
 _SHARED_KEYWORDS = {
@@ -28,6 +28,44 @@ def clean(html: str) -> tuple[str, list[str]]:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip(), alt_texts
+
+
+def extract_heading_images(html: str) -> list[dict]:
+    """
+    Returns [{src, caption}] for every heading+image pair in the HTML.
+    A pair is: a <p> with a <strong> (or h1-h4) followed immediately by a <p> with only an <img>.
+    Only images with a non-empty caption are returned.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict] = []
+    last_heading: str = ""
+
+    for el in soup.find_all(["h1", "h2", "h3", "h4", "p"]):
+        if not isinstance(el, Tag):
+            continue
+        # Check if this element is a heading
+        if el.name in ("h1", "h2", "h3", "h4"):
+            text = el.get_text(" ", strip=True)
+            if text:
+                last_heading = text
+            continue
+        # <p> containing a <strong> (and no img) → treat as heading
+        has_strong = el.find("strong")
+        has_img = el.find("img")
+        if has_strong and not has_img:
+            text = el.get_text(" ", strip=True)
+            if text:
+                last_heading = text
+            continue
+        # <p> containing only an <img> → image paragraph
+        if has_img and not el.get_text(strip=True):
+            src = has_img.get("src", "")
+            # Fall back to alt text as caption if no heading found
+            caption = last_heading or has_img.get("alt", "")
+            if src and caption:
+                results.append({"src": src, "caption": caption})
+            last_heading = ""  # consume the heading
+    return results
 
 
 def room_from_alt(alt: str) -> str | None:

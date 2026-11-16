@@ -57,7 +57,7 @@ def _search_tenant(vec: str, property_id: int | None, room_number: str | None) -
             cur.execute(
                 """
                 SELECT content, heading, kb_page_title, kb_page_type, room_number,
-                       1 - (embedding <=> %s::vector) AS similarity
+                       1 - (embedding <=> %s::vector) AS similarity, images
                 FROM chunks
                 WHERE kb_page_type = 'building'
                   AND property_id = %s
@@ -70,7 +70,7 @@ def _search_tenant(vec: str, property_id: int | None, room_number: str | None) -
             cur.execute(
                 """
                 SELECT content, heading, kb_page_title, kb_page_type, room_number,
-                       1 - (embedding <=> %s::vector) AS similarity
+                       1 - (embedding <=> %s::vector) AS similarity, images
                 FROM chunks WHERE kb_page_type = 'building' AND property_id IS NULL
                 ORDER BY similarity DESC LIMIT %s
                 """,
@@ -84,7 +84,7 @@ def _search_admin(vec: str) -> list[dict]:
         cur = c.cursor()
         cur.execute(
             "SELECT content, heading, kb_page_title, kb_page_type, room_number, "
-            "1 - (embedding <=> %s::vector) AS similarity FROM chunks "
+            "1 - (embedding <=> %s::vector) AS similarity, images FROM chunks "
             "ORDER BY similarity DESC LIMIT %s",
             (vec, TOP_K),
         )
@@ -94,7 +94,8 @@ def _search_admin(vec: str) -> list[dict]:
 def _fmt(rows: list) -> list[dict]:
     return [
         {"content": r[0], "heading": r[1], "kb_page_title": r[2],
-         "kb_page_type": r[3], "room_number": r[4], "similarity": round(float(r[5]), 4)}
+         "kb_page_type": r[3], "room_number": r[4], "similarity": round(float(r[5]), 4),
+         "images": r[6] or []}
         for r in rows if r[5] >= MIN_SCORE
     ]
 

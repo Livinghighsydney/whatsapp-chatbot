@@ -4,6 +4,7 @@ import os
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import PlainTextResponse
 from app.services import ai, structured, whatsapp as wa, handoff, handoff_wa
+from app.rag.retrieve import retrieve
 from app.models import conversation, message
 from app.core import sse
 
@@ -60,11 +61,32 @@ async def _process(from_: str, body: str, message_id: str) -> None:
         else:
             message.add(from_, "assistant", reply)
             wa.send_text(to=from_, body=reply)
+            _send_images(from_, body, conv)
             sse.push("refresh")
             logger.info("Replied | to=%s", from_)
 
     except Exception:
         logger.exception("Failed to process message from %s", from_)
+
+
+def _send_images(to: str, query: str, conv: dict) -> None:
+    """Send up to 2 images from the top high-confidence chunk, if any."""
+    chunks = retrieve(query, property_address=conv.get("property_address"),
+                      room_number=conv.get("room"))
+    sent = 0
+    for chunk in chunks:
+        if chunk["similarity"] < 0.55 or not chunk.get("images"):
+            continue
+        for img in chunk["images"][:2]:
+            if sent >= 2:
+                return
+            try:
+                wa.send_image_url(to=to, url=img["src"], caption=img.get("caption", ""))
+                sent += 1
+            except Exception:
+                logger.warning("Failed to send image | url=%s", img["src"])
+        if sent:
+            return
 
 
 @router.get("/webhook/whatsapp")
