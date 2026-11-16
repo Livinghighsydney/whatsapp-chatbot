@@ -58,16 +58,26 @@ def _build_system(conv: dict | None) -> str:
 
 
 async def get_reply(message: str, history: list[dict] | None = None, conv: dict | None = None) -> str:
+    from app.rag.retrieve import retrieve, build_context
     messages: list[dict] = []
     if history:
         for entry in history[-10:]:
             if entry["role"] in ("user", "assistant"):
                 messages.append({"role": entry["role"], "content": entry["content"]})
     messages.append({"role": "user", "content": message})
+
+    system = _build_system(conv)
+    if conv:
+        chunks = retrieve(message, property_address=conv.get("property_address"),
+                          room_number=conv.get("room"))
+        ctx = build_context(chunks)
+        if ctx:
+            system = ctx + "\n\n---\n\n" + system
+
     response = await _client_().messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=500,
-        system=_build_system(conv),
+        system=system,
         messages=messages,
     )
     return response.content[0].text
