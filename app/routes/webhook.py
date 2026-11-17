@@ -19,7 +19,10 @@ _INFO_PROMPT = (
 
 async def _process(from_: str, body: str, message_id: str) -> None:
     try:
-        wa.mark_read_typing(message_id)
+        try:
+            wa.mark_read_typing(message_id)
+        except Exception:
+            pass  # non-critical — don't let a typing indicator timeout kill the reply
 
         if handoff.get_mode() == "whatsapp" and handoff.is_staff(from_):
             handoff_wa.handle_message(from_, body)
