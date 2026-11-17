@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 ALTER TABLE chunks ADD COLUMN IF NOT EXISTS images JSONB DEFAULT '[]';
 
+-- Allow awaiting_handoff status (drop+recreate so it's idempotent)
+ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_status_check;
+ALTER TABLE conversations ADD CONSTRAINT conversations_status_check
+    CHECK (status IN ('bot_active', 'collecting_info', 'handed_off', 'resolved', 'awaiting_handoff'));
+
 CREATE INDEX IF NOT EXISTS chunks_kb_page_id_idx ON chunks(kb_page_id);
 CREATE INDEX IF NOT EXISTS chunks_property_id_idx ON chunks(property_id);
 CREATE INDEX IF NOT EXISTS chunks_room_number_idx ON chunks(room_number);
