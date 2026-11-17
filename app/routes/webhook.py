@@ -16,6 +16,37 @@ _INFO_PROMPT = (
     "Before I help, could you quickly share your *name*, *property address*, and *room number*?"
 )
 
+_YES = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "definitely",
+        "y", "ye", "yess", "yes please", "go ahead", "connect me", "sure thing"}
+
+
+def _is_yes(text: str) -> bool:
+    return text.lower().strip().rstrip("!.").strip() in _YES
+
+
+async def _bot_reply(from_: str, body: str, conv: dict) -> None:
+    hist = message.history(from_)
+    conv = conversation.get_or_create(from_)
+    reply = await ai.get_reply(body, history=hist, conv=conv)
+
+    is_hoff, reason = ai.is_handoff(reply)
+    if is_hoff:
+        handoff.trigger(from_, reason)
+        return
+
+    is_sug, sug_reason, clean_reply = ai.is_handoff_suggest(reply)
+    if is_sug:
+        conversation.update(from_, status="awaiting_handoff", handoff_reason=sug_reason)
+        message.add(from_, "assistant", clean_reply)
+        wa.send_text(to=from_, body=clean_reply)
+    else:
+        message.add(from_, "assistant", reply)
+        wa.send_text(to=from_, body=reply)
+        _send_images(from_, body, conv)
+
+    sse.push("refresh")
+    logger.info("Replied | to=%s", from_)
+
 
 async def _process(from_: str, body: str, message_id: str) -> None:
     try:
@@ -54,19 +85,16 @@ async def _process(from_: str, body: str, message_id: str) -> None:
             wa.send_text(to=from_, body=_INFO_PROMPT)
             return
 
-        hist = message.history(from_)
-        conv = conversation.get_or_create(from_)
-        reply = await ai.get_reply(body, history=hist, conv=conv)
-        is_hoff, reason = ai.is_handoff(reply)
+        if conv["status"] == "awaiting_handoff":
+            if _is_yes(body):
+                handoff.trigger(from_, conv.get("handoff_reason") or "Tenant confirmed they need staff assistance")
+                return
+            else:
+                conversation.update(from_, status="bot_active")
+                conv["status"] = "bot_active"
+                # fall through to normal reply
 
-        if is_hoff:
-            handoff.trigger(from_, reason)
-        else:
-            message.add(from_, "assistant", reply)
-            wa.send_text(to=from_, body=reply)
-            _send_images(from_, body, conv)
-            sse.push("refresh")
-            logger.info("Replied | to=%s", from_)
+        await _bot_reply(from_, body, conv)
 
     except Exception:
         logger.exception("Failed to process message from %s", from_)

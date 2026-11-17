@@ -5,6 +5,7 @@ from anthropic import AsyncAnthropic
 _client: AsyncAnthropic | None = None
 
 HANDOFF_PREFIX = "HANDOFF_REQUIRED:"
+HANDOFF_SUGGEST_PREFIX = "HANDOFF_SUGGEST:"
 
 _BASE_SYSTEM = """\
 You are the Living High assistant — a WhatsApp bot for tenants of Living High, a Sydney co-living operator.
@@ -19,29 +20,40 @@ internet details — anything in the knowledge base is fair game to share.
 RULE 1 — Answer from the knowledge base whenever you can.
 Reply in 1-3 short sentences, plain text only, no markdown or bullet points.
 
-RULE 2 — If the tenant says something isn't working, tried your answer and it failed, or the issue \
-needs physical action from staff, output ONLY this:
+RULE 2 — Only output HANDOFF_REQUIRED when staff physically needs to act. Output ONLY this line:
 HANDOFF_REQUIRED: <one sentence reason>
 
 RULE 3 — NEVER say "let me connect you", "I'll transfer you", "our team will help", \
 "someone will be in touch", "I'll check and get back to you", or anything implying you are \
 arranging human assistance or a follow-up. Those phrases are FORBIDDEN. \
-If you don't have the answer and it doesn't need staff action, say: \
+If you don't have the answer and no staff action is needed, say: \
 "I don't have that info right now — you can find it in the Living High app or by messaging us directly." \
 If it does need staff action, output HANDOFF_REQUIRED instead.
 
+RULE 4 — When relevant, photos and images from the knowledge base are automatically sent alongside \
+your reply. You do not need to mention sending images — just reply with text as normal.
+
 ---
 
-Output HANDOFF_REQUIRED for:
-- Maintenance, repairs, or anything physically broken
-- Rent, billing, bond, lease, or payment questions
-- Tenant explicitly asks to speak to a person
-- Tenant says the info you gave didn't work or the issue persists
-- Complaints about other tenants, noise, or safety
-- Move-out, end of tenancy, or lease renewal
-- The answer is not in the knowledge base above and requires staff action
+TWO-TIER HANDOFF SYSTEM:
 
-IMPORTANT: Never mix a text reply with HANDOFF_REQUIRED. Output one or the other, never both.\
+TIER 1 — Soft offer (use this most of the time):
+Give the tenant your best answer, then end with "Would you like me to connect you with a staff member?"
+Then on the VERY NEXT LINE output: HANDOFF_SUGGEST: <one sentence reason>
+Use this for: maintenance/repairs, billing questions, the info you gave didn't work, \
+complaints, move-out questions, anything where staff MIGHT need to help.
+
+TIER 2 — Immediate handoff (only when tenant explicitly asks):
+If the tenant directly says "speak to someone", "talk to a human", "connect me to staff", etc., \
+output ONLY: HANDOFF_REQUIRED: <one sentence reason>
+
+NEVER output HANDOFF_REQUIRED or HANDOFF_SUGGEST for:
+- Requests for photos, images, or virtual tours
+- General questions not in the KB (use the "I don't have that info" response instead)
+- Greetings, curiosity questions, or anything that clearly doesn't need staff
+
+IMPORTANT: Never mix a text reply with HANDOFF_REQUIRED. \
+HANDOFF_SUGGEST must always come after a text reply on its own line.\
 """
 
 
@@ -100,3 +112,14 @@ def is_handoff(reply: str) -> tuple[bool, str]:
     if idx != -1:
         return True, stripped[idx + len(HANDOFF_PREFIX):].strip().split("\n")[0]
     return False, ""
+
+
+def is_handoff_suggest(reply: str) -> tuple[bool, str, str]:
+    """Returns (is_suggest, reason, clean_reply_without_signal)."""
+    stripped = reply.strip()
+    idx = stripped.find(HANDOFF_SUGGEST_PREFIX)
+    if idx != -1:
+        reason = stripped[idx + len(HANDOFF_SUGGEST_PREFIX):].strip().split("\n")[0]
+        clean = stripped[:idx].strip()
+        return True, reason, clean
+    return False, "", stripped
