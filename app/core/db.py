@@ -14,11 +14,28 @@ def _get_pool() -> pool.SimpleConnectionPool:
 
 
 def get_conn():
-    return _get_pool().getconn()
+    p = _get_pool()
+    c = p.getconn()
+    try:
+        c.cursor().execute("SELECT 1")
+    except Exception:
+        # Connection is dead — replace it with a fresh one
+        try:
+            p.putconn(c, close=True)
+        except Exception:
+            pass
+        c = psycopg2.connect(os.environ["DATABASE_URL"])
+    return c
 
 
 def put_conn(conn) -> None:
-    _get_pool().putconn(conn)
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 class _Conn:
@@ -27,10 +44,13 @@ class _Conn:
         return self._conn
 
     def __exit__(self, exc_type, *_):
-        if exc_type:
-            self._conn.rollback()
-        else:
-            self._conn.commit()
+        try:
+            if exc_type:
+                self._conn.rollback()
+            else:
+                self._conn.commit()
+        except Exception:
+            pass
         put_conn(self._conn)
 
 
