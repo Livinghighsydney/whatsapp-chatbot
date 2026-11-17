@@ -45,17 +45,8 @@ def _split_paragraphs(text: str) -> list[str]:
     return chunks
 
 
-def _split_html_sections(html: str) -> list[str]:
-    """Split raw HTML on divider lines so we can extract images per section."""
-    return [s.strip() for s in _DIVIDER_RE.split(html) if s.strip()]
-
-
 def chunk_page(page: dict) -> list[dict]:
     html = page.get("content", "")
-    text, _ = clean(html)
-    if len(text) < 30:
-        return []
-
     page_id = str(page["id"])
     page_type = page.get("type", "general")
     property_id: int | None = page["id"] if page_type == "building" else None
@@ -71,26 +62,25 @@ def chunk_page(page: dict) -> list[dict]:
     idx = 0
 
     if page_type == "building":
-        html_sections = _split_html_sections(html)
-        text_sections = _split_sections(text)
-        for i, section in enumerate(text_sections):
-            if len(section) < 30:
+        # Split HTML directly — text and images stay aligned per section
+        html_sections = [s.strip() for s in _DIVIDER_RE.split(html) if s.strip()]
+        for html_sec in html_sections:
+            text, _ = clean(html_sec)
+            if len(text) < 30:
                 continue
-            # Extract heading+image pairs from the matching HTML section
-            section_images = extract_heading_images(html_sections[i]) if i < len(html_sections) else []
-            first_chunk_in_section = True
-            for content, room_number in _split_room_subsections(section):
+            section_images = extract_heading_images(html_sec)
+            for content, room_number in _split_room_subsections(text):
                 if len(content) < 30:
                     continue
                 for part in _split_paragraphs(content):
-                    # Images go onto the first chunk of this section only
-                    images = section_images if first_chunk_in_section else []
                     result.append({**base, "room_number": room_number,
                                    "chunk_index": idx, "heading": part.split("\n")[0].strip()[:200],
-                                   "content": part[:MAX_CHARS], "images": images})
+                                   "content": part[:MAX_CHARS], "images": section_images})
                     idx += 1
-                    first_chunk_in_section = False
     else:
+        text, _ = clean(html)
+        if len(text) < 30:
+            return []
         for part in _split_paragraphs(text):
             result.append({**base, "room_number": None,
                            "chunk_index": idx, "heading": part.split("\n")[0].strip()[:200],

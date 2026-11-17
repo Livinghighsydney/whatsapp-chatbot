@@ -70,22 +70,22 @@ async def _process(from_: str, body: str, message_id: str) -> None:
 
 
 def _send_images(to: str, query: str, conv: dict) -> None:
-    """Send up to 2 images from the top high-confidence chunk, if any."""
     chunks = retrieve(query, property_address=conv.get("property_address"),
                       room_number=conv.get("room"))
-    sent = 0
+    sent_urls: set[str] = set()
     for chunk in chunks:
-        if chunk["similarity"] < 0.55 or not chunk.get("images"):
+        if chunk["similarity"] < 0.45 or not chunk.get("images"):
             continue
-        for img in chunk["images"][:2]:
-            if sent >= 2:
-                return
+        for img in chunk["images"]:
+            url = img.get("src", "")
+            if not url or url in sent_urls or len(sent_urls) >= 2:
+                continue
             try:
-                wa.send_image_url(to=to, url=img["src"], caption=img.get("caption", ""))
-                sent += 1
+                wa.send_image_url(to=to, url=url, caption=img.get("caption", ""))
+                sent_urls.add(url)
             except Exception:
-                logger.warning("Failed to send image | url=%s", img["src"])
-        if sent:
+                logger.warning("Failed to send image | url=%s", url)
+        if sent_urls:
             return
 
 
