@@ -11,6 +11,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 from app import migrate
 from app.routes.webhook import router as webhook_router
 from app.routes.staff import router as staff_router
+from app.routes.internal import router as internal_router
 
 
 @asynccontextmanager
@@ -30,6 +31,7 @@ app.add_middleware(
 
 app.include_router(webhook_router)
 app.include_router(staff_router)
+app.include_router(internal_router)
 
 
 @app.get("/")
