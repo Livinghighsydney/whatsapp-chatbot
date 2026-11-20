@@ -1,9 +1,10 @@
 from __future__ import annotations
 import logging
 import os
+import asyncio
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import PlainTextResponse
-from app.services import ai, structured, whatsapp as wa, handoff, handoff_wa
+from app.services import ai, structured, whatsapp as wa, handoff, handoff_wa, memory
 from app.rag.retrieve import retrieve
 from app.models import conversation, message
 from app.core import sse
@@ -45,6 +46,7 @@ async def _bot_reply(from_: str, body: str, conv: dict) -> None:
         _send_images(from_, body, conv)
 
     sse.push("refresh")
+    asyncio.create_task(memory.extract(from_, message.history(from_)))
     logger.info("Replied | to=%s", from_)
 
 

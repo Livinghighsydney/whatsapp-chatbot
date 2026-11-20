@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 ALTER TABLE chunks ADD COLUMN IF NOT EXISTS images JSONB DEFAULT '[]';
 
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS memory JSONB DEFAULT '{}';
+
 -- Allow awaiting_handoff status (drop+recreate so it's idempotent)
 ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_status_check;
 ALTER TABLE conversations ADD CONSTRAINT conversations_status_check

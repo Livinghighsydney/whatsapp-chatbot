@@ -64,7 +64,7 @@ def _client_() -> AsyncAnthropic:
     return _client
 
 
-def _build_system(conv: dict | None) -> str:
+def _build_system(conv: dict | None, memory: dict | None = None) -> str:
     if not conv:
         return _BASE_SYSTEM
     parts = []
@@ -74,22 +74,36 @@ def _build_system(conv: dict | None) -> str:
         parts.append(f"Property: {conv['property_address']}")
     if conv.get("room"):
         parts.append(f"Room: {conv['room']}")
-    if not parts:
-        return _BASE_SYSTEM
-    preamble = "TENANT IDENTITY (use this context in your replies):\n" + "\n".join(parts) + "\n\n---\n\n"
-    return preamble + _BASE_SYSTEM
+
+    preamble = ""
+    if parts:
+        preamble += "TENANT IDENTITY (use this context in your replies):\n" + "\n".join(parts) + "\n\n---\n\n"
+
+    if memory:
+        lines = ["TENANT MEMORY (facts from past conversations — use to personalise replies):"]
+        for key, val in memory.items():
+            if isinstance(val, list):
+                for item in val:
+                    lines.append(f"- {key}: {item}")
+            else:
+                lines.append(f"- {key}: {val}")
+        preamble += "\n".join(lines) + "\n\n---\n\n"
+
+    return preamble + _BASE_SYSTEM if preamble else _BASE_SYSTEM
 
 
 async def get_reply(message: str, history: list[dict] | None = None, conv: dict | None = None) -> str:
     from app.rag.retrieve import retrieve, build_context
+    from app.models.conversation import get_memory
     messages: list[dict] = []
     if history:
-        for entry in history[-10:]:
+        for entry in history[-6:]:
             if entry["role"] in ("user", "assistant"):
                 messages.append({"role": entry["role"], "content": entry["content"]})
     messages.append({"role": "user", "content": message})
 
-    system = _build_system(conv)
+    memory = get_memory(conv["tenant_phone"]) if conv and conv.get("tenant_phone") else {}
+    system = _build_system(conv, memory)
     if conv:
         chunks = retrieve(message, property_address=conv.get("property_address"),
                           room_number=conv.get("room"))

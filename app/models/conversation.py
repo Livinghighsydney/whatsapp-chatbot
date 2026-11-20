@@ -63,6 +63,24 @@ def find_by_session(session_id: str) -> str | None:
         return row[0] if row else None
 
 
+def get_memory(phone: str) -> dict:
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute("SELECT memory FROM conversations WHERE tenant_phone = %s", [phone])
+        row = cur.fetchone()
+        return row[0] if row and row[0] else {}
+
+
+def set_memory(phone: str, blob: dict) -> None:
+    import json
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute(
+            "UPDATE conversations SET memory = %s WHERE tenant_phone = %s",
+            [json.dumps(blob), phone],
+        )
+
+
 def delete(phone: str) -> None:
     with db.conn() as c:
         cur = c.cursor()
